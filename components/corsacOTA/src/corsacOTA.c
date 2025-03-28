@@ -437,39 +437,71 @@ void CO_NO_RETURN co_hardware_restart()
 // }
 static co_err_t co_parse_request_text(const char *text, char *op, char *data, char *target, char *options)
 {
-    int ret, n, target_pos = 0, options_pos = 0;
-
-    // 基本格式: "op=start&data=size&target=isp&options=xxxx"
-    ret = sscanf(text, "op=%10[^&]&data=%n%[^&]&target=%n%[^&]%n&options=%n%s",
-                 op, &n, data, &target_pos, target, &options_pos, options);
-
-    if (target_pos > 0 && options_pos > 0 && ret >= 3)
-    {
-        return CO_OK;
-    }
-
-    if (target_pos > 0 && ret >= 3)
-    {
-        options[0] = '\0'; // 没有options参数
-        return CO_OK;
-    }
-
-    // 兼容旧格式 - 无target参数表示升级ESP自身
+    // 初始化返回值
+    op[0] = '\0';
+    data[0] = '\0';
     target[0] = '\0';
     options[0] = '\0';
-
-    ret = sscanf(text, "op=%10[^&]&data=%n%s", op, &n, data);
-    if (ret == 2)
-    {
-        return CO_OK;
+    
+    // 查找字段
+    const char *op_start = strstr(text, "op=");
+    const char *data_start = strstr(text, "&data=");
+    const char *target_start = strstr(text, "&target=");
+    const char *options_start = strstr(text, "&options=");
+    
+    if (!op_start) {
+        ESP_LOGE(CO_TAG, "解析错误：缺少op字段 [%s]", text);
+        return CO_FAIL; // 必须有op字段
     }
-    else if (ret == 1 && text[n] == '\0')
-    {
+    
+    // 解析op字段
+    op_start += 3; // 跳过"op="
+    const char *op_end = strchr(op_start, '&');
+    if (!op_end) op_end = op_start + strlen(op_start); // 如果是最后一个字段
+    int op_len = op_end - op_start;
+    if (op_len > 10) op_len = 10; // 限制长度
+    strncpy(op, op_start, op_len);
+    op[op_len] = '\0';
+    
+    // 解析data字段（如果存在）
+    if (data_start) {
+        data_start += 6; // 跳过"&data="
+        const char *data_end = strstr(data_start, "&");
+        if (!data_end) data_end = data_start + strlen(data_start); // 如果是最后一个字段
+        int data_len = data_end - data_start;
+        if (data_len > 10) data_len = 10; // 限制长度
+        strncpy(data, data_start, data_len);
+        data[data_len] = '\0';
+    } else {
+        // data字段可选
         data[0] = '\0';
-        return CO_OK;
     }
-
-    return CO_FAIL;
+    
+    // 如果有target字段
+    if (target_start) {
+        target_start += 8; // 跳过"&target="
+        const char *target_end = strstr(target_start, "&");
+        if (!target_end) target_end = target_start + strlen(target_start); // 如果是最后一个字段
+        int target_len = target_end - target_start;
+        if (target_len > 10) target_len = 10; // 限制长度
+        strncpy(target, target_start, target_len);
+        target[target_len] = '\0';
+    }
+    
+    // 如果有options字段
+    if (options_start) {
+        options_start += 9; // 跳过"&options="
+        int options_len = strlen(options_start);
+        if (options_len > 50) options_len = 50; // 限制长度
+        strncpy(options, options_start, options_len);
+        options[options_len] = '\0';
+    }
+    
+    ESP_LOGI(CO_TAG, "解析结果: op=%s, data=%s, target=%s, options=%s", 
+             op, data, strlen(target) > 0 ? target : "(空)", 
+             strlen(options) > 0 ? options : "(空)");
+    
+    return CO_OK;
 }
 
 /// 处理ISP升级的函数
@@ -1042,11 +1074,11 @@ static void co_ota_start(void *data)
     char target_field[10 + 1] = {0};
     char options_field[50 + 1] = {0};
     const char *res_msg;
-    const char *err_msg;
+    const char *err_msg = NULL;
     int size;
 
     // 解析参数
-    if (co_parse_request_text(data, op_field, data_field, target_field, options_field) != CO_OK)
+    if (co_parse_request_text((const char *)data, op_field, data_field, target_field, options_field) != CO_OK)
     {
         co_websocket_send_msg_with_code(CO_RES_INVALID_ARG, "解析参数失败");
         return;
@@ -1254,7 +1286,8 @@ static void co_websocket_process_binary(uint8_t *data, size_t len)
 
 static void co_websocket_process_text(uint8_t *data, size_t len)
 {
-    char op_field[10 + 1], data_field[10 + 1];
+    char op_field[10 + 1] = {0};
+    char data_field[10 + 1] = {0};
     char target_field[10 + 1] = {0};
     char options_field[50 + 1] = {0};
     char *text;
@@ -1264,24 +1297,26 @@ static void co_websocket_process_text(uint8_t *data, size_t len)
     text = strndup((char *)data, len);
     if (text == NULL)
     {
-        // TODO: memory leak
+        ESP_LOGE(CO_TAG, "内存分配失败");
         goto clean;
     }
 
+    ESP_LOGI(CO_TAG, "收到请求: %s", text);
+
     if (co_parse_request_text(text, op_field, data_field, target_field, options_field) != CO_OK)
     {
-        co_websocket_send_msg_with_code(CO_RES_INVALID_ARG, "parse error");
+        co_websocket_send_msg_with_code(CO_RES_INVALID_ARG, "解析参数失败");
         goto clean;
     }
 
     if ((fn = co_get_process_entry(op_field)) == NULL)
     {
-        co_websocket_send_msg_with_code(CO_RES_INVALID_ARG, "invalid op");
+        co_websocket_send_msg_with_code(CO_RES_INVALID_ARG, "无效的操作");
         goto clean;
     }
 
-    // start process!
-    fn(data_field);
+    // 调用处理函数，传递完整的原始文本
+    fn(text);
 
 clean:
     free(text);
