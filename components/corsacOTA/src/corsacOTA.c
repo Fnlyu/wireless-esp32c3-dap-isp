@@ -41,18 +41,16 @@
 #include "lwip/sockets.h"
 #include "lwip/sys.h"
 #include <lwip/netdb.h>
-// 添加UART驱动头文件
-#include "driver/uart.h"
 
 #include "sdkconfig.h"
 #if (defined CONFIG_IDF_TARGET_ESP8266) && (CONFIG_IDF_TARGET_ESP8266 == 1)
-#define CO_TARGET_ESP8266 1
+#define CO_TARGET_ESP8266   1
 #define CO_DEVICE_TYPE_NAME "esp8266"
 #include "esp8266/eagle_soc.h"
 #endif
 
 #if (defined CONFIG_IDF_TARGET_ESP32) && (CONFIG_IDF_TARGET_ESP32 == 1)
-#define CO_TARGET_ESP32 1
+#define CO_TARGET_ESP32     1
 #define CO_DEVICE_TYPE_NAME "esp32"
 #include "esp32/rom/uart.h"
 #include "hal/wdt_hal.h"
@@ -62,7 +60,7 @@
 
 #if (defined CONFIG_IDF_TARGET_ESP32S2) && (CONFIG_IDF_TARGET_ESP32S2 == 1)
 #define CO_DEVICE_TYPE_NAME "esp32s2"
-#define CO_TARGET_ESP32 1
+#define CO_TARGET_ESP32     1
 #include "esp32s2/rom/uart.h"
 #include "hal/wdt_hal.h"
 #include "hal/wdt_types.h"
@@ -71,7 +69,7 @@
 
 #if (defined CONFIG_IDF_TARGET_ESP32C3) && (CONFIG_IDF_TARGET_ESP32C3 == 1)
 #define CO_DEVICE_TYPE_NAME "esp32c3"
-#define CO_TARGET_ESP32C3 1
+#define CO_TARGET_ESP32C3     1
 #include "esp32c3/rom/uart.h"
 #include "hal/wdt_hal.h"
 #include "hal/wdt_types.h"
@@ -80,7 +78,7 @@
 
 #if (defined CONFIG_IDF_TARGET_ESP32S3) && (CONFIG_IDF_TARGET_ESP32S3 == 1)
 #define CO_DEVICE_TYPE_NAME "esp32s3"
-#define CO_TARGET_ESP32S3 1
+#define CO_TARGET_ESP32S3     1
 #include "esp32s3/rom/uart.h"
 #include "hal/wdt_hal.h"
 #include "hal/wdt_types.h"
@@ -97,17 +95,17 @@
 
 static const char *CO_TAG = "corsacOTA";
 
-#define CONFIG_CO_SOCKET_BUFFER_SIZE 1500
+#define CONFIG_CO_SOCKET_BUFFER_SIZE  1500
 #define CONFIG_CO_WS_TEXT_BUFFER_SIZE 100
 
-#define LOG_FMT(x) "%s: " x, __func__
+#define LOG_FMT(x)                    "%s: " x, __func__
 
-#define min(a, b) ((a) < (b) ? (a) : (b))
+#define min(a, b)                     ((a) < (b) ? (a) : (b))
 
-#define CO_NO_RETURN __attribute__((noreturn))
-#define CO_INLINE __attribute__((always_inline))
+#define CO_NO_RETURN                  __attribute__((noreturn))
+#define CO_INLINE                     __attribute__((always_inline))
 
-#define CO_TEST_MODE 0
+#define CO_TEST_MODE                  0
 
 #if (CO_TEST_MODE == 1)
 #warning corsacOTA test mode is in use
@@ -117,8 +115,7 @@ static const char *CO_TAG = "corsacOTA";
  * @brief corsacOTA websocket control block
  *
  */
-typedef struct co_websocket_cb
-{
+typedef struct co_websocket_cb {
     uint8_t FIN;
     uint8_t OPCODE;
 
@@ -128,8 +125,7 @@ typedef struct co_websocket_cb
 
     size_t payload_read_len; // the number of payload bytes already read
 
-    union
-    {
+    union {
         uint32_t val;
         uint8_t data[4];
     } mask;
@@ -141,11 +137,9 @@ typedef struct co_websocket_cb
  * @brief corsacOTA socket control block
  *
  */
-typedef struct co_socket_cb
-{
+typedef struct co_socket_cb {
     int fd; // The file descriptor for this socket
-    enum co_socket_status
-    {
+    enum co_socket_status {
         CO_SOCKET_ACCEPT = 0,
         CO_SOCKET_HANDSHAKE,               // not handshake, or in progress
         CO_SOCKET_WEBSOCKET_HEADER,        // already handshake, now reading the header of websocket frame
@@ -167,10 +161,8 @@ typedef struct co_socket_cb
  * @brief corsacOTA OTA control block
  *
  */
-typedef struct co_ota_cb
-{
-    enum co_ota_status
-    {
+typedef struct co_ota_cb {
+    enum co_ota_status {
         CO_OTA_INIT = 0,
         CO_OTA_LOAD,
         CO_OTA_DONE,
@@ -189,19 +181,13 @@ typedef struct co_ota_cb
     int32_t chunk_size;        // The response will be made every time the chunk size is reached
     int32_t last_index_offset; // The offset recorded in the last response
 
-    // 新增ISP升级相关字段
-    bool is_isp_mode;        // true: 升级下级设备, false: 升级ESP自身
-    uint8_t isp_device_type; // 目标设备类型
-    uint8_t isp_uart_port;   // ISP使用的UART端口
-    uint32_t isp_baudrate;   // ISP使用的波特率
 } co_ota_cb_t;
 
 /**
  * @brief corsacOTA http control block
  *
  */
-typedef struct co_cb
-{
+typedef struct co_cb {
     int listen_fd;        // server listener FD
     int websocket_fd;     // only one websocket is allowed.
     uint8_t *recv_data;   // recv buffer at websocket stage (text mode)
@@ -226,8 +212,7 @@ static co_cb_t *global_cb = NULL;
 
 typedef void (*co_process_fn_t)(void *);
 
-typedef struct co_process_entry
-{
+typedef struct co_process_entry {
     const char *str;
     co_process_fn_t fn;
 } co_process_entry_t;
@@ -235,7 +220,7 @@ typedef struct co_process_entry
 static void co_ota_start(void *data);
 static void co_ota_stop(void *data);
 
-#define CO_ENTRY_DICT_LEN (sizeof(co_entry_dict) / sizeof(co_entry_dict[0]))
+#define CO_ENTRY_DICT_LEN      (sizeof(co_entry_dict) / sizeof(co_entry_dict[0]))
 #define CO_ENTRT_DICT_ITEM_LEN (sizeof(co_entry_dict[0]))
 
 // must be sorted alphabetically
@@ -244,22 +229,19 @@ static const co_process_entry_t co_entry_dict[] = {
     {"stop", co_ota_stop},
 };
 
-static int co_compare(const void *s1, const void *s2)
-{
+static int co_compare(const void *s1, const void *s2) {
     const co_process_entry_t *e1 = s1;
     const co_process_entry_t *e2 = s2;
 
     return strcmp(e1->str, e2->str);
 }
 
-static co_process_fn_t co_get_process_entry(char *str)
-{
+static co_process_fn_t co_get_process_entry(char *str) {
     co_process_entry_t *res;
     co_process_entry_t key = {str, NULL};
 
     res = bsearch(&key, co_entry_dict, CO_ENTRY_DICT_LEN, CO_ENTRT_DICT_ITEM_LEN, co_compare);
-    if (res)
-    {
+    if (res) {
         return res->fn;
     }
 
@@ -274,8 +256,7 @@ extern void esp_reset_reason_set_hint(esp_reset_reason_t hint);
  * @brief In some cases, reboot operation cannot be completed properly, so we take a forced reboot.
  *
  */
-static void CO_NO_RETURN co_hardware_restart()
-{
+static void CO_NO_RETURN co_hardware_restart() {
 
     vPortEnterCritical(); // avoid entering the panicHandler
 
@@ -301,8 +282,7 @@ static void CO_NO_RETURN co_hardware_restart()
                       1 << WDT_CTL_EN_LSB,
                       0);
 
-    while (1)
-    {
+    while (1) {
     }
 }
 #endif // CO_TARGET_ESP8266
@@ -316,8 +296,7 @@ extern void xt_ints_off(unsigned int mask);
  * @brief In some cases, reboot operation cannot be completed properly, so we take a forced reboot.
  *
  */
-void CO_NO_RETURN co_hardware_restart()
-{
+void CO_NO_RETURN co_hardware_restart() {
     wdt_hal_context_t rtc_wdt_ctx;
     uint32_t stage_timeout_ticks;
 
@@ -337,8 +316,7 @@ void CO_NO_RETURN co_hardware_restart()
 
     esp_reset_reason_set_hint(ESP_RST_SW); // software restart
 
-    while (1)
-    {
+    while (1) {
     }
 }
 #elif (CO_TARGET_ESP32S3)
@@ -346,8 +324,7 @@ extern void uart_tx_wait_idle(uint8_t uart_no);
 extern void esp_reset_reason_set_hint(esp_reset_reason_t hint);
 extern void xt_ints_off(unsigned int mask);
 
-void CO_NO_RETURN co_hardware_restart()
-{
+void CO_NO_RETURN co_hardware_restart() {
     wdt_hal_context_t rtc_wdt_ctx;
     uint32_t stage_timeout_ticks;
 
@@ -367,8 +344,7 @@ void CO_NO_RETURN co_hardware_restart()
 
     esp_reset_reason_set_hint(ESP_RST_SW); // software restart
 
-    while (1)
-    {
+    while (1) {
     }
 }
 #elif (CO_TARGET_ESP32C3)
@@ -379,8 +355,7 @@ extern void riscv_global_interrupts_disable(void);
  * @brief In some cases, reboot operation cannot be completed properly, so we take a forced reboot.
  *
  */
-void CO_NO_RETURN co_hardware_restart()
-{
+void CO_NO_RETURN co_hardware_restart() {
     wdt_hal_context_t rtc_wdt_ctx;
     uint32_t stage_timeout_ticks;
 
@@ -399,8 +374,7 @@ void CO_NO_RETURN co_hardware_restart()
 
     esp_reset_reason_set_hint(ESP_RST_SW); // software restart
 
-    while (1)
-    {
+    while (1) {
     }
 }
 
@@ -416,229 +390,22 @@ void CO_NO_RETURN co_hardware_restart()
  * - CO_OK
  * - CO_FAIL
  */
+static co_err_t co_parse_request_text(const char *text, char *op, char *data) {
+    int ret, n;
 
-// 原先的
-//  static co_err_t co_parse_request_text(const char *text, char *op, char *data) {
-//      int ret, n;
-
-//     n = 0;
-//     // "op=auth&data=password"
-//     // "op=start&data=12345"
-//     // "op=stop&data="
-//     ret = sscanf(text, "op=%10[^&]&data=%n%10s", op, &n, data);
-//     if (ret == 2) {
-//         return CO_OK;
-//     } else if (ret == 1 && text[n] == '\0') { // data is empty
-//         data[0] = '\0';
-//         return CO_OK;
-//     } else {
-//         return CO_FAIL;
-//     }
-// }
-static co_err_t co_parse_request_text(const char *text, char *op, char *data, char *target, char *options)
-{
-    int ret, n, target_pos = 0, options_pos = 0;
-
-    // 基本格式: "op=start&data=size&target=isp&options=xxxx"
-    ret = sscanf(text, "op=%10[^&]&data=%n%[^&]&target=%n%[^&]%n&options=%n%s",
-                 op, &n, data, &target_pos, target, &options_pos, options);
-
-    if (target_pos > 0 && options_pos > 0 && ret >= 3)
-    {
+    n = 0;
+    // "op=auth&data=password"
+    // "op=start&data=12345"
+    // "op=stop&data="
+    ret = sscanf(text, "op=%10[^&]&data=%n%10s", op, &n, data);
+    if (ret == 2) {
         return CO_OK;
-    }
-
-    if (target_pos > 0 && ret >= 3)
-    {
-        options[0] = '\0'; // 没有options参数
-        return CO_OK;
-    }
-
-    // 兼容旧格式 - 无target参数表示升级ESP自身
-    target[0] = '\0';
-    options[0] = '\0';
-
-    ret = sscanf(text, "op=%10[^&]&data=%n%s", op, &n, data);
-    if (ret == 2)
-    {
-        return CO_OK;
-    }
-    else if (ret == 1 && text[n] == '\0')
-    {
+    } else if (ret == 1 && text[n] == '\0') { // data is empty
         data[0] = '\0';
         return CO_OK;
+    } else {
+        return CO_FAIL;
     }
-
-    return CO_FAIL;
-}
-
-/// 处理ISP升级的函数
-static const char *co_isp_ota_init(uint8_t device_type, int32_t size, uint32_t baudrate)
-{
-    // 配置ISP通信的UART
-    uart_config_t uart_config = {
-        .baud_rate = baudrate,
-        .data_bits = UART_DATA_8_BITS,
-        .parity = UART_PARITY_DISABLE,
-        .stop_bits = UART_STOP_BITS_1,
-        .flow_ctrl = UART_HW_FLOWCTRL_DISABLE};
-
-    // 使用UART1作为ISP接口 (ESP32C3上的UART1通常是GPIO19和GPIO18)
-    global_cb->ota.isp_uart_port = UART_NUM_1;
-    global_cb->ota.isp_baudrate = baudrate;
-
-    // 配置UART
-    uart_param_config(global_cb->ota.isp_uart_port, &uart_config);
-    uart_driver_install(global_cb->ota.isp_uart_port, 2048, 2048, 0, NULL, 0);
-
-    // 在ESP32C3上设置UART引脚
-    uart_set_pin(global_cb->ota.isp_uart_port, 19, 18, -1, -1);
-
-    // 发送ISP升级启动命令到目标设备
-    uint8_t isp_start_cmd[10] = {0};
-
-    // 根据设备类型构建不同的ISP启动命令
-    // 这里以STM32为例 (根据实际目标芯片修改)
-    switch (device_type)
-    {
-    case 1: // STM32 设备
-        // STM32 ISP启动序列
-        isp_start_cmd[0] = 0x7F; // 同步字节
-        break;
-    case 2: // 其他设备类型
-        // 自定义协议...
-        break;
-    default:
-        return "不支持的设备类型";
-    }
-
-    global_cb->ota.isp_device_type = device_type;
-
-    // 发送启动命令
-    uart_write_bytes(global_cb->ota.isp_uart_port, (const char *)isp_start_cmd,
-                     device_type == 1 ? 1 : sizeof(isp_start_cmd));
-
-    // 等待目标设备响应
-    uint8_t response[4] = {0};
-    // 在co_isp_ota_init函数中
-    size_t len = uart_read_bytes(global_cb->ota.isp_uart_port, response,
-                                 sizeof(response), pdMS_TO_TICKS(1000));
-
-    if (len <= 0 || (device_type == 1 && response[0] != 0x79))
-    { // STM32回应0x79表示ACK
-        uart_driver_delete(global_cb->ota.isp_uart_port);
-        return "目标设备未进入ISP模式";
-    }
-
-    // 擦除闪存命令 (根据设备不同有不同命令)
-    if (device_type == 1)
-    { // STM32
-        // 发送STM32的擦除命令...
-        uint8_t erase_cmd[] = {0x43, 0xBC}; // STM32 擦除命令+校验
-        uart_write_bytes(global_cb->ota.isp_uart_port, (const char *)erase_cmd, sizeof(erase_cmd));
-
-        // 等待擦除确认
-        len = uart_read_bytes(global_cb->ota.isp_uart_port, response, 1, pdMS_TO_TICKS(5000));
-        if (len <= 0 || response[0] != 0x79)
-        {
-            uart_driver_delete(global_cb->ota.isp_uart_port);
-            return "擦除固件失败";
-        }
-    }
-
-    return NULL; // 成功初始化
-}
-
-static const char *co_isp_ota_write(void *data, size_t len)
-{
-    uint8_t *buf = (uint8_t *)data;
-    size_t bytes_left = len;
-    size_t pos = 0;
-    uint8_t response[1];
-
-    // 处理STM32设备
-    if (global_cb->ota.isp_device_type == 1)
-    {
-        while (bytes_left > 0)
-        {
-            // 决定当前块大小
-            size_t chunk_size = bytes_left > 256 ? 256 : bytes_left;
-
-            // 写入地址命令 (假设从0x08000000开始写入)
-            uint8_t addr_cmd[6] = {0x31, 0xCE, // 写入内存命令+校验
-                                   0x08, 0x00, (global_cb->ota.offset >> 8) & 0xFF,
-                                   global_cb->ota.offset & 0xFF};
-            uart_write_bytes(global_cb->ota.isp_uart_port, (const char *)addr_cmd, sizeof(addr_cmd));
-
-            // 等待ACK
-            if (uart_read_bytes(global_cb->ota.isp_uart_port, response, 1, pdMS_TO_TICKS(1000)) <= 0 ||
-                response[0] != 0x79)
-            {
-                return "设置写入地址失败";
-            }
-
-            // 发送数据长度和数据
-            uint8_t *send_buf = malloc(chunk_size + 2);
-            if (!send_buf)
-            {
-                return "内存不足";
-            }
-
-            send_buf[0] = chunk_size - 1; // STM32数据长度是N-1
-            memcpy(send_buf + 1, buf + pos, chunk_size);
-
-            // 计算校验和
-            uint8_t checksum = send_buf[0];
-            for (int i = 0; i < chunk_size; i++)
-            {
-                checksum ^= send_buf[1 + i];
-            }
-            send_buf[1 + chunk_size] = checksum;
-
-            // 发送数据包
-            uart_write_bytes(global_cb->ota.isp_uart_port, (const char *)send_buf, chunk_size + 2);
-            free(send_buf);
-
-            // 等待ACK
-            if (uart_read_bytes(global_cb->ota.isp_uart_port, response, 1, pdMS_TO_TICKS(1000)) <= 0 ||
-                response[0] != 0x79)
-            {
-                return "写入数据块失败";
-            }
-
-            pos += chunk_size;
-            bytes_left -= chunk_size;
-            global_cb->ota.offset += chunk_size;
-        }
-    }
-    else
-    {
-        // 处理其他设备类型的写入
-        // ...
-    }
-
-    return NULL; // 成功
-}
-
-static const char *co_isp_ota_end()
-{
-    uint8_t response[1];
-
-    // 完成STM32烧录
-    if (global_cb->ota.isp_device_type == 1)
-    {
-        // 重置目标设备
-        uint8_t run_cmd[2] = {0x21, 0xDE}; // 运行应用程序命令+校验
-        uart_write_bytes(global_cb->ota.isp_uart_port, (const char *)run_cmd, sizeof(run_cmd));
-
-        // 等待ACK (部分设备可能不会回复)
-        uart_read_bytes(global_cb->ota.isp_uart_port, response, 1, pdMS_TO_TICKS(500));
-    }
-
-    // 释放资源
-    uart_driver_delete(global_cb->ota.isp_uart_port);
-
-    return NULL; // 成功
 }
 
 /*  RFC 6455: The WebSocket Protocol
@@ -663,43 +430,38 @@ static const char *co_isp_ota_end()
     +---------------------------------------------------------------+
 */
 
-#define WS_FIN 0x80
-#define WS_RSV1 0x40
-#define WS_RSV2 0x20
-#define WS_RSV3 0x10
+#define WS_FIN                 0x80
+#define WS_RSV1                0x40
+#define WS_RSV2                0x20
+#define WS_RSV3                0x10
 #define WS_OPCODE_CONTINUTAION 0x00
-#define WS_OPCODE_TEXT 0x01
-#define WS_OPCODE_BINARY 0x02
-#define WS_OPCODE_CLOSE 0x08
-#define WS_OPCODE_PING 0x09
-#define WS_OPCODE_PONG 0x0A
+#define WS_OPCODE_TEXT         0x01
+#define WS_OPCODE_BINARY       0x02
+#define WS_OPCODE_CLOSE        0x08
+#define WS_OPCODE_PING         0x09
+#define WS_OPCODE_PONG         0x0A
 
-#define WS_MASK 0x80
+#define WS_MASK                0x80
 
-static inline int co_websocket_get_res_payload_offset(int payload_len)
-{
+static inline int co_websocket_get_res_payload_offset(int payload_len) {
     //  promise: payload_len <= 65535
     return 2 + (payload_len >= 126 ? 2 : 0);
 }
 
-static co_err_t co_websocket_process_header(co_cb_t *cb, co_socket_cb_t *scb)
-{
+static co_err_t co_websocket_process_header(co_cb_t *cb, co_socket_cb_t *scb) {
     uint8_t opcode, fin, mask;
     uint64_t payload_len;
     uint8_t *data;
 
     data = (uint8_t *)scb->buf;
 
-    if (scb->status == CO_SOCKET_WEBSOCKET_HEADER)
-    {
-        if (scb->remaining_len < 2)
-        {
+    if (scb->status == CO_SOCKET_WEBSOCKET_HEADER) {
+        if (scb->remaining_len < 2) {
             return CO_OK;
         }
 
         // check RSV
-        if (data[0] & 0b1110000)
-        {
+        if (data[0] & 0b1110000) {
             return CO_FAIL; // no extension defining RSV
         }
 
@@ -710,8 +472,7 @@ static co_err_t co_websocket_process_header(co_cb_t *cb, co_socket_cb_t *scb)
         mask = (data[1] & WS_MASK) == WS_MASK;
         payload_len = data[1] & 0x7F;
 
-        switch (opcode)
-        {
+        switch (opcode) {
         case WS_OPCODE_CONTINUTAION:
             // nothing to do
             break;
@@ -736,35 +497,26 @@ static co_err_t co_websocket_process_header(co_cb_t *cb, co_socket_cb_t *scb)
         scb->wcb.payload_len = payload_len;
 
         // extended payload length should be read
-        if (payload_len == 126 || payload_len == 127)
-        {
+        if (payload_len == 126 || payload_len == 127) {
             scb->status = CO_SOCKET_WEBSOCKET_EXTEND_LENGTH;
-        }
-        else if (mask == 1)
-        {
+        } else if (mask == 1) {
             scb->status = CO_SOCKET_WEBSOCKET_MASK;
         }
 
         scb->read_len = 2; // first 2 byte header
     }
 
-    if (scb->status == CO_SOCKET_WEBSOCKET_EXTEND_LENGTH)
-    {
-        if (scb->wcb.payload_len == 126)
-        {
-            if (scb->remaining_len < scb->read_len + 2)
-            { // 2 byte extended length
+    if (scb->status == CO_SOCKET_WEBSOCKET_EXTEND_LENGTH) {
+        if (scb->wcb.payload_len == 126) {
+            if (scb->remaining_len < scb->read_len + 2) { // 2 byte extended length
                 return CO_OK;
             }
 
             payload_len = data[2] << 8 | data[3]; // 0 + scb->read_len == 2
 
             scb->read_len += 2;
-        }
-        else if (scb->wcb.payload_len == 127)
-        { // 8 byte extended length
-            if (scb->remaining_len < scb->read_len + 8)
-            {
+        } else if (scb->wcb.payload_len == 127) { // 8 byte extended length
+            if (scb->remaining_len < scb->read_len + 8) {
                 return CO_OK;
             }
 
@@ -778,16 +530,13 @@ static co_err_t co_websocket_process_header(co_cb_t *cb, co_socket_cb_t *scb)
             payload_len |= ((uint64_t)(data[2]) << 56);
 
             // most significant bit MUST be 0
-            if (((payload_len >> 63) & 0b1) == 0x1)
-            {
+            if (((payload_len >> 63) & 0b1) == 0x1) {
                 ESP_LOGE(CO_TAG, "wrong payload length");
                 return CO_FAIL;
             }
 
             scb->read_len += 8;
-        }
-        else
-        {
+        } else {
             payload_len = scb->wcb.payload_len;
         }
 
@@ -796,19 +545,15 @@ static co_err_t co_websocket_process_header(co_cb_t *cb, co_socket_cb_t *scb)
         scb->status = scb->wcb.MASK == 1 ? CO_SOCKET_WEBSOCKET_MASK : CO_SOCKET_WEBSOCKET_PAYLOAD;
     }
 
-    if (scb->status == CO_SOCKET_WEBSOCKET_MASK)
-    {
-        if (scb->remaining_len < scb->read_len + 4)
-        { // 4 byte mask
+    if (scb->status == CO_SOCKET_WEBSOCKET_MASK) {
+        if (scb->remaining_len < scb->read_len + 4) { // 4 byte mask
             return CO_OK;
         }
 
         memcpy(&scb->wcb.mask.data[0], &data[scb->read_len], 4);
         scb->read_len += 4;
         scb->status = CO_SOCKET_WEBSOCKET_PAYLOAD;
-    }
-    else
-    {
+    } else {
         scb->status = CO_SOCKET_WEBSOCKET_PAYLOAD;
     }
 
@@ -816,8 +561,7 @@ static co_err_t co_websocket_process_header(co_cb_t *cb, co_socket_cb_t *scb)
 }
 
 // We promise that the length of the payload should not exceed 65535
-static co_err_t co_websocket_send_frame(void *frame_buffer, size_t payload_len, int frame_type)
-{
+static co_err_t co_websocket_send_frame(void *frame_buffer, size_t payload_len, int frame_type) {
     int sz;
     uint16_t payload_length;
     uint8_t *p;
@@ -831,8 +575,7 @@ static co_err_t co_websocket_send_frame(void *frame_buffer, size_t payload_len, 
     *p++ = (payload_length >= 126 ? 126 : payload_length);
 
     // extended length
-    if (payload_length >= 126)
-    {
+    if (payload_length >= 126) {
         payload_length = htons(payload_length);
         memcpy(p, &payload_length, 2);
         p += 2;
@@ -846,8 +589,7 @@ static co_err_t co_websocket_send_frame(void *frame_buffer, size_t payload_len, 
 }
 
 // Create a new frame buffer, construct text and send frame.
-static co_err_t co_websocket_send_msg_with_code(int code, const char *msg)
-{
+static co_err_t co_websocket_send_msg_with_code(int code, const char *msg) {
     char *buffer;
     int len, ret;
     int offset;
@@ -855,23 +597,18 @@ static co_err_t co_websocket_send_msg_with_code(int code, const char *msg)
     len = strlen(msg);
     offset = co_websocket_get_res_payload_offset(len);
     buffer = malloc(offset + len + 25);
-    if (buffer == NULL)
-    {
+    if (buffer == NULL) {
         ret = CO_ERROR_NO_MEM;
         goto cleanup;
     }
 
-    if (code == CO_RES_SUCCESS)
-    {
+    if (code == CO_RES_SUCCESS) {
         ret = snprintf(buffer + offset, len + 24, "code=%d&data=\"%s\"", code, msg);
-    }
-    else
-    {
+    } else {
         ret = snprintf(buffer + offset, len + 24, "code=%d&data=\"msg=%s\"", code, msg);
     }
 
-    if (ret < 0)
-    {
+    if (ret < 0) {
         ESP_LOGE(CO_TAG, "invalid arg");
         ret = CO_ERROR_INVALID_ARG;
         goto cleanup;
@@ -886,16 +623,14 @@ cleanup:
 
 #if (CO_TEST_MODE == 1)
 // use for test
-static co_err_t co_websocket_send_echo(void *data, size_t len, int frame_type)
-{
+static co_err_t co_websocket_send_echo(void *data, size_t len, int frame_type) {
     char *buffer;
     int ret;
     int offset;
 
     offset = co_websocket_get_res_payload_offset(len);
     buffer = malloc(offset + len);
-    if (buffer == NULL)
-    {
+    if (buffer == NULL) {
         ret = CO_ERROR_NO_MEM;
         goto cleanup;
     }
@@ -909,10 +644,8 @@ cleanup:
 }
 #endif // (CO_TEST_MODE == 1)
 
-static const char *co_ota_error_to_msg(esp_err_t err)
-{
-    switch (err)
-    {
+static const char *co_ota_error_to_msg(esp_err_t err) {
+    switch (err) {
     case ESP_OK:
         return NULL;
     case ESP_ERR_NO_MEM:
@@ -943,21 +676,18 @@ static const char *co_ota_error_to_msg(esp_err_t err)
  * @param size Total firmware size
  * @return const char* Error message, returns NULL indicating that no error occurred
  */
-static const char *co_ota_init(int32_t size)
-{
+static const char *co_ota_init(int32_t size) {
     const esp_partition_t *boot_ptn, *running_ptn, *update_ptn;
     esp_err_t ret;
 
     boot_ptn = esp_ota_get_boot_partition();
     running_ptn = esp_ota_get_running_partition();
-    if (boot_ptn != running_ptn)
-    {
+    if (boot_ptn != running_ptn) {
         //// TODO:  boot image become corrupted
     }
 
     update_ptn = esp_ota_get_next_update_partition(NULL);
-    if (update_ptn == NULL)
-    {
+    if (update_ptn == NULL) {
         global_cb->ota.status = CO_OTA_FATAL_ERROR;
         global_cb->ota.error_code = CO_ERROR_INVALID_OTA_PTN;
         return "Invalid OTA data partition";
@@ -973,18 +703,15 @@ static const char *co_ota_init(int32_t size)
 }
 
 // write ota data
-static const char *co_ota_write(void *data, size_t len)
-{
+static const char *co_ota_write(void *data, size_t len) {
     esp_err_t ret = esp_ota_write(global_cb->ota.update_handle, data, len);
     return co_ota_error_to_msg(ret);
 }
 
-static const char *co_ota_end()
-{
+static const char *co_ota_end() {
     esp_err_t ret = esp_ota_end(global_cb->ota.update_handle);
 
-    if (ret != ESP_OK)
-    {
+    if (ret != ESP_OK) {
         return co_ota_error_to_msg(ret);
     }
 
@@ -997,285 +724,124 @@ static const char *co_ota_end()
  *
  * @param data Pointer to a string indicating the size of the firmware
  */
-// static void co_ota_start(void *data) { // TODO: return value -> status
-//     const char *res_msg = "deviceType=" CO_DEVICE_TYPE_NAME "&state=ready&offset=0";
-//     const char *err_msg;
-//     int size;
-
-//     // may be we should ignore status...
-//     // if (global_cb->ota.status != CO_OTA_INIT && global_cb->ota.status != CO_OTA_STOP) {
-//     //     co_websocket_send_msg_with_code(CO_RES_INVALID_STATUS, "OTA has not started");
-//     //     return;
-//     // }
-
-//     size = atoi(data);
-//     if (size < 1) {
-//         co_websocket_send_msg_with_code(CO_RES_INVALID_SIZE, "Invalid size");
-//         return;
-//     }
-
-//     err_msg = co_ota_init(size);
-//     if (err_msg != NULL) {
-//         co_websocket_send_msg_with_code(CO_RES_SYSTEM_ERROR, err_msg);
-//         return;
-//     }
-
-//     global_cb->ota.status = CO_OTA_LOAD;
-//     global_cb->ota.total_size = size;
-
-//     size = min(global_cb->ota.total_size / 10, 1024 * 10); // 10KB default
-//     if (size == 0) {
-//         size = 1; // Firmware too small...
-//     }
-
-//     global_cb->ota.chunk_size = size;
-//     global_cb->ota.offset = 0;
-//     global_cb->ota.last_index_offset = 0;
-
-//     co_websocket_send_msg_with_code(CO_RES_SUCCESS, res_msg);
-// }
-
-static void co_ota_start(void *data)
-{
-    char op_field[10 + 1] = {0};
-    char data_field[10 + 1] = {0};
-    char target_field[10 + 1] = {0};
-    char options_field[50 + 1] = {0};
-    const char *res_msg;
+static void co_ota_start(void *data) { // TODO: return value -> status
+    const char *res_msg = "deviceType=" CO_DEVICE_TYPE_NAME "&state=ready&offset=0";
     const char *err_msg;
     int size;
 
-    // 解析参数
-    if (co_parse_request_text(data, op_field, data_field, target_field, options_field) != CO_OK)
-    {
-        co_websocket_send_msg_with_code(CO_RES_INVALID_ARG, "解析参数失败");
+    // may be we should ignore status...
+    // if (global_cb->ota.status != CO_OTA_INIT && global_cb->ota.status != CO_OTA_STOP) {
+    //     co_websocket_send_msg_with_code(CO_RES_INVALID_STATUS, "OTA has not started");
+    //     return;
+    // }
+
+    size = atoi(data);
+    if (size < 1) {
+        co_websocket_send_msg_with_code(CO_RES_INVALID_SIZE, "Invalid size");
         return;
     }
 
-    // 提取固件大小
-    size = atoi(data_field);
-    if (size < 1)
-    {
-        co_websocket_send_msg_with_code(CO_RES_INVALID_SIZE, "无效的固件大小");
-        return;
-    }
-
-    // 检查是否是ISP升级模式
-    if (strcmp(target_field, "isp") == 0)
-    {
-        // 解析ISP选项 (格式: type=1&baudrate=115200)
-        uint8_t device_type = 1;    // 默认
-        uint32_t baudrate = 115200; // 默认
-
-        char *type_str = strstr(options_field, "type=");
-        if (type_str)
-        {
-            device_type = atoi(type_str + 5);
-        }
-
-        char *baud_str = strstr(options_field, "baudrate=");
-        if (baud_str)
-        {
-            baudrate = atoi(baud_str + 9);
-        }
-
-        // 进入ISP升级模式
-        global_cb->ota.is_isp_mode = true;
-        err_msg = co_isp_ota_init(device_type, size, baudrate);
-        res_msg = "deviceType=ISP&state=ready&offset=0";
-    }
-    else
-    {
-        // 正常ESP自身OTA升级
-        global_cb->ota.is_isp_mode = false;
-        err_msg = co_ota_init(size);
-        res_msg = "deviceType=" CO_DEVICE_TYPE_NAME "&state=ready&offset=0";
-    }
-
-    if (err_msg != NULL)
-    {
+    err_msg = co_ota_init(size);
+    if (err_msg != NULL) {
         co_websocket_send_msg_with_code(CO_RES_SYSTEM_ERROR, err_msg);
         return;
     }
 
     global_cb->ota.status = CO_OTA_LOAD;
     global_cb->ota.total_size = size;
-    global_cb->ota.chunk_size = min(global_cb->ota.total_size / 10, 1024 * 10);
+
+    size = min(global_cb->ota.total_size / 10, 1024 * 10); // 10KB default
+    if (size == 0) {
+        size = 1; // Firmware too small...
+    }
+
+    global_cb->ota.chunk_size = size;
     global_cb->ota.offset = 0;
     global_cb->ota.last_index_offset = 0;
 
     co_websocket_send_msg_with_code(CO_RES_SUCCESS, res_msg);
 }
 
-static void co_ota_stop(void *data)
-{
-    if (global_cb->ota.status != CO_OTA_FATAL_ERROR)
-    {
+static void co_ota_stop(void *data) {
+    if (global_cb->ota.status != CO_OTA_FATAL_ERROR) {
         memset(&global_cb->ota, 0, sizeof(global_cb->ota));
         global_cb->ota.status = CO_OTA_STOP;
         co_websocket_send_msg_with_code(CO_RES_SUCCESS, "");
-    }
-    else
-    {
+    } else {
         co_websocket_send_msg_with_code(CO_RES_SYSTEM_ERROR, "Fatal error");
     }
 }
 
-// static void co_websocket_process_binary(uint8_t *data, size_t len) {
-//     char res[32]; // state=ready&offset=2147483647
-//     const char *err_msg;
-//     bool is_done;
-
-//     if (global_cb->ota.status == CO_OTA_LOAD) {
-//         global_cb->ota.offset += (int)len;
-//         is_done = global_cb->ota.total_size == global_cb->ota.offset;
-//         if (is_done) {
-//             // If everything is fine, then we will restart chip afterwards, which does not require the use of the status
-//             global_cb->ota.status = CO_OTA_INIT;
-//         }
-
-//         err_msg = co_ota_write(data, len);
-//         if (err_msg != NULL) {
-//             memset(&global_cb->ota, 0, sizeof(global_cb->ota));
-//             global_cb->ota.status = CO_OTA_STOP;
-//             co_websocket_send_msg_with_code(CO_RES_SYSTEM_ERROR, err_msg);
-//             return;
-//         }
-
-//         // response
-//         if (!is_done && global_cb->ota.offset - global_cb->ota.last_index_offset < global_cb->ota.chunk_size) {
-//             return;
-//         }
-
-//         global_cb->ota.last_index_offset = global_cb->ota.offset;
-
-//         snprintf(res, 32, "state=%s&offset=%d", is_done ? "done" : "ready", global_cb->ota.offset);
-
-//         if (is_done) {
-//             err_msg = co_ota_end();
-//             if (err_msg != NULL) {
-//                 co_websocket_send_msg_with_code(CO_RES_SYSTEM_ERROR, err_msg);
-//                 return;
-//             }
-
-//             co_websocket_send_msg_with_code(CO_RES_SUCCESS, res);
-
-//             ESP_LOGD(CO_TAG, "prepare to restart");
-//             vTaskDelay(pdMS_TO_TICKS(5000));
-//             co_hardware_restart();
-//         }
-
-//         co_websocket_send_msg_with_code(CO_RES_SUCCESS, res);
-//     } else if (global_cb->ota.status != CO_OTA_STOP) {
-//         // skip the rest of the frame when a stop command is received
-//         co_websocket_send_msg_with_code(CO_RES_INVALID_STATUS, "OTA has not started");
-//     }
-// }
-
-static void co_websocket_process_binary(uint8_t *data, size_t len)
-{
-    char res[32];
+static void co_websocket_process_binary(uint8_t *data, size_t len) {
+    char res[32]; // state=ready&offset=2147483647
     const char *err_msg;
     bool is_done;
 
-    if (global_cb->ota.status == CO_OTA_LOAD)
-    {
+    if (global_cb->ota.status == CO_OTA_LOAD) {
         global_cb->ota.offset += (int)len;
         is_done = global_cb->ota.total_size == global_cb->ota.offset;
-
-        if (is_done)
-        {
+        if (is_done) {
+            // If everything is fine, then we will restart chip afterwards, which does not require the use of the status
             global_cb->ota.status = CO_OTA_INIT;
         }
 
-        // 根据模式选择写入方式
-        if (global_cb->ota.is_isp_mode)
-        {
-            err_msg = co_isp_ota_write(data, len);
-        }
-        else
-        {
-            err_msg = co_ota_write(data, len);
-        }
-
-        if (err_msg != NULL)
-        {
+        err_msg = co_ota_write(data, len);
+        if (err_msg != NULL) {
             memset(&global_cb->ota, 0, sizeof(global_cb->ota));
             global_cb->ota.status = CO_OTA_STOP;
             co_websocket_send_msg_with_code(CO_RES_SYSTEM_ERROR, err_msg);
             return;
         }
 
-        // 响应分块处理
-        if (!is_done && global_cb->ota.offset - global_cb->ota.last_index_offset < global_cb->ota.chunk_size)
-        {
+        // response
+        if (!is_done && global_cb->ota.offset - global_cb->ota.last_index_offset < global_cb->ota.chunk_size) {
             return;
         }
 
         global_cb->ota.last_index_offset = global_cb->ota.offset;
+
         snprintf(res, 32, "state=%s&offset=%d", is_done ? "done" : "ready", global_cb->ota.offset);
 
-        if (is_done)
-        {
-            // 结束OTA流程
-            if (global_cb->ota.is_isp_mode)
-            {
-                err_msg = co_isp_ota_end();
-            }
-            else
-            {
-                err_msg = co_ota_end();
-            }
-
-            if (err_msg != NULL)
-            {
+        if (is_done) {
+            err_msg = co_ota_end();
+            if (err_msg != NULL) {
                 co_websocket_send_msg_with_code(CO_RES_SYSTEM_ERROR, err_msg);
                 return;
             }
 
             co_websocket_send_msg_with_code(CO_RES_SUCCESS, res);
 
-            // 仅当升级ESP自身时才需要重启
-            if (!global_cb->ota.is_isp_mode)
-            {
-                ESP_LOGD(CO_TAG, "prepare to restart");
-                vTaskDelay(pdMS_TO_TICKS(5000));
-                co_hardware_restart();
-            }
+            ESP_LOGD(CO_TAG, "prepare to restart");
+            vTaskDelay(pdMS_TO_TICKS(5000));
+            co_hardware_restart();
         }
 
         co_websocket_send_msg_with_code(CO_RES_SUCCESS, res);
-    }
-    else if (global_cb->ota.status != CO_OTA_STOP)
-    {
+    } else if (global_cb->ota.status != CO_OTA_STOP) {
+        // skip the rest of the frame when a stop command is received
         co_websocket_send_msg_with_code(CO_RES_INVALID_STATUS, "OTA has not started");
     }
 }
 
-static void co_websocket_process_text(uint8_t *data, size_t len)
-{
+static void co_websocket_process_text(uint8_t *data, size_t len) {
     char op_field[10 + 1], data_field[10 + 1];
-    char target_field[10 + 1] = {0};
-    char options_field[50 + 1] = {0};
     char *text;
     co_process_fn_t fn;
 
     // Note that the text may not have a terminator
+    // TODO: add terminator
     text = strndup((char *)data, len);
-    if (text == NULL)
-    {
+    if (text == NULL) {
         // TODO: memory leak
         goto clean;
     }
 
-    if (co_parse_request_text(text, op_field, data_field, target_field, options_field) != CO_OK)
-    {
+    if (co_parse_request_text(text, op_field, data_field) != CO_OK) {
         co_websocket_send_msg_with_code(CO_RES_INVALID_ARG, "parse error");
         goto clean;
     }
 
-    if ((fn = co_get_process_entry(op_field)) == NULL)
-    {
+    if ((fn = co_get_process_entry(op_field)) == NULL) {
         co_websocket_send_msg_with_code(CO_RES_INVALID_ARG, "invalid op");
         goto clean;
     }
@@ -1289,8 +855,7 @@ clean:
 
 // send pong response
 // TODO: too long ping frame
-static void co_websocket_process_ping(co_cb_t *cb, co_socket_cb_t *scb)
-{
+static void co_websocket_process_ping(co_cb_t *cb, co_socket_cb_t *scb) {
     int len;
 
     // control frame max payload length: 125 -> 0 byte extended length
@@ -1303,8 +868,7 @@ static void co_websocket_process_ping(co_cb_t *cb, co_socket_cb_t *scb)
 
 // close handshake
 // TODO: array
-static void co_websocket_process_close(co_cb_t *cb, co_socket_cb_t *scb)
-{
+static void co_websocket_process_close(co_cb_t *cb, co_socket_cb_t *scb) {
     uint8_t buf[4];
     uint8_t *p = buf;
 
@@ -1317,8 +881,7 @@ static void co_websocket_process_close(co_cb_t *cb, co_socket_cb_t *scb)
     send(scb->fd, buf, 4, 0);
 }
 
-static inline CO_INLINE uint32_t co_rotr32(uint32_t n, unsigned int c)
-{
+static inline CO_INLINE uint32_t co_rotr32(uint32_t n, unsigned int c) {
     const unsigned int mask = (CHAR_BIT * sizeof(n) - 1);
     c &= mask;
     return (n >> c) | (n << ((-c) & mask));
@@ -1335,8 +898,7 @@ static inline CO_INLINE uint32_t co_rotr32(uint32_t n, unsigned int c)
  * @param mask websocket mask. Little-endian 32bis mask.
  * @param len data length
  */
-void co_websocket_fast_mask(uint8_t *data, uint32_t mask, size_t len)
-{
+void co_websocket_fast_mask(uint8_t *data, uint32_t mask, size_t len) {
     uint32_t new_mask;
     int align_len;
     size_t i;
@@ -1345,20 +907,17 @@ void co_websocket_fast_mask(uint8_t *data, uint32_t mask, size_t len)
 
     unsigned long int dst = (long int)data;
 
-    if (len >= 8)
-    {
+    if (len >= 8) {
         // copy just a few bytes to make dst aligned.
         align_len = (-dst) % 4;
         len -= align_len;
 
-        for (i = 0; i < align_len; i++)
-        {
+        for (i = 0; i < align_len; i++) {
             data[i] ^= p_mask[i];
         }
 
         // use the new mask on the aligned address
-        switch (align_len)
-        {
+        switch (align_len) {
         case 1:
             new_mask = co_rotr32(mask, 8U);
             break;
@@ -1377,8 +936,7 @@ void co_websocket_fast_mask(uint8_t *data, uint32_t mask, size_t len)
 
         dst += align_len;
 
-        for (i = 0; i < len / 4; i++)
-        {
+        for (i = 0; i < len / 4; i++) {
             *((uint32_t *)dst) ^= new_mask;
             dst += 4;
         }
@@ -1387,17 +945,14 @@ void co_websocket_fast_mask(uint8_t *data, uint32_t mask, size_t len)
     }
 
     // There are just a few bytes to process
-    for (i = 0; i < len; i++)
-    {
+    for (i = 0; i < len; i++) {
         *((uint8_t *)dst) ^= p_mask[i % 4];
         dst += 1;
     }
 }
 
-static inline uint32_t co_websocket_get_new_mask(uint32_t mask, size_t len)
-{
-    switch (len & 0b11)
-    {
+static inline uint32_t co_websocket_get_new_mask(uint32_t mask, size_t len) {
+    switch (len & 0b11) {
     case 1:
         return co_rotr32(mask, 8U);
     case 2:
@@ -1418,8 +973,7 @@ static inline uint32_t co_websocket_get_new_mask(uint32_t mask, size_t len)
  * - CO_OK: Successful processing of all payloads
  * - CO_ERROR_IO_PENDING: There are still new frames to be processed
  */
-static co_err_t co_websocket_process_payload(co_cb_t *cb, co_socket_cb_t *scb)
-{
+static co_err_t co_websocket_process_payload(co_cb_t *cb, co_socket_cb_t *scb) {
     int len, new_len;
     uint8_t *data;
     uint32_t mask;
@@ -1429,8 +983,7 @@ static co_err_t co_websocket_process_payload(co_cb_t *cb, co_socket_cb_t *scb)
     len = min(scb->remaining_len - scb->read_len, scb->wcb.payload_len);
 
     // For ping frames, we will directly change their opcode and send.
-    if (scb->wcb.MASK == 1 && scb->wcb.OPCODE != WS_OPCODE_PING)
-    {
+    if (scb->wcb.MASK == 1 && scb->wcb.OPCODE != WS_OPCODE_PING) {
         mask = scb->wcb.mask.val;
         co_websocket_fast_mask(data, mask, len);
 
@@ -1438,35 +991,29 @@ static co_err_t co_websocket_process_payload(co_cb_t *cb, co_socket_cb_t *scb)
     }
 
     // In the previous processing, we can ensure that each new frame can begin in a place where the Buffer offset is 0.
-    switch (scb->wcb.OPCODE)
-    {
+    switch (scb->wcb.OPCODE) {
     case WS_OPCODE_TEXT:
 #if (CO_TEST_MODE == 1)
         co_websocket_send_echo(data, len, WS_OPCODE_TEXT);
         break;
 #endif
         // case 0: This frame should be skip
-        if (scb->wcb.skip_frame)
-        {
-            if (len == scb->wcb.payload_len)
-            { // The last part of the data in this frame has been received
+        if (scb->wcb.skip_frame) {
+            if (len == scb->wcb.payload_len) { // The last part of the data in this frame has been received
                 scb->wcb.skip_frame = false;
             }
             break;
         }
 
         // case 1: Receive the entire payload
-        if (len == scb->wcb.payload_len && cb->recv_data_offset == 0)
-        {
+        if (len == scb->wcb.payload_len && cb->recv_data_offset == 0) {
             co_websocket_process_text(data, len);
             break;
         }
 
         // case 2: Part of the payload has been received before
-        if (len > CONFIG_CO_WS_TEXT_BUFFER_SIZE - cb->recv_data_offset)
-        { // overflow
-            if (len < scb->wcb.payload_len)
-            { // This frame has not yet been received
+        if (len > CONFIG_CO_WS_TEXT_BUFFER_SIZE - cb->recv_data_offset) { // overflow
+            if (len < scb->wcb.payload_len) {                             // This frame has not yet been received
                 scb->wcb.skip_frame = true;
             }
 
@@ -1478,8 +1025,7 @@ static co_err_t co_websocket_process_payload(co_cb_t *cb, co_socket_cb_t *scb)
         memcpy(cb->recv_data + cb->recv_data_offset, data, len);
         cb->recv_data_offset += len;
 
-        if (len == scb->wcb.payload_len)
-        {
+        if (len == scb->wcb.payload_len) {
             co_websocket_process_text(cb->recv_data, len);
             cb->recv_data_offset = 0;
         }
@@ -1507,8 +1053,7 @@ static co_err_t co_websocket_process_payload(co_cb_t *cb, co_socket_cb_t *scb)
 
     new_len = scb->remaining_len - scb->read_len - len;
     // case 0: New frames still exist
-    if (new_len > 0)
-    {
+    if (new_len > 0) {
         // For simplicity, we make sure that the websocket header is always at the beginning of the buf.
         memcpy(scb->buf, data + len, new_len);
 
@@ -1521,8 +1066,7 @@ static co_err_t co_websocket_process_payload(co_cb_t *cb, co_socket_cb_t *scb)
         return CO_ERROR_IO_PENDING;
     }
     // case 1: The payload part is not yet fully read.
-    else if (scb->wcb.payload_len > len)
-    {
+    else if (scb->wcb.payload_len > len) {
         scb->wcb.payload_len -= len;
 
         scb->read_len = 0;
@@ -1531,8 +1075,7 @@ static co_err_t co_websocket_process_payload(co_cb_t *cb, co_socket_cb_t *scb)
         return CO_OK;
     }
     // case 2: Exactly one complete frame is read and there is no remaining available data in buf.
-    else
-    {
+    else {
         scb->read_len = 0;
         scb->remaining_len = 0;
 
@@ -1543,10 +1086,8 @@ static co_err_t co_websocket_process_payload(co_cb_t *cb, co_socket_cb_t *scb)
     }
 }
 
-static esp_err_t co_websocket_process(co_cb_t *cb, co_socket_cb_t *scb)
-{
-    if (cb->websocket != scb)
-    {
+static esp_err_t co_websocket_process(co_cb_t *cb, co_socket_cb_t *scb) {
+    if (cb->websocket != scb) {
         return ESP_FAIL;
     }
     int fd, ret, offset;
@@ -1555,32 +1096,26 @@ static esp_err_t co_websocket_process(co_cb_t *cb, co_socket_cb_t *scb)
     offset = scb->remaining_len;
 
     ret = recv(fd, scb->buf + offset, CONFIG_CO_SOCKET_BUFFER_SIZE - offset, 0);
-    if (ret <= 0)
-    {
+    if (ret <= 0) {
         return ESP_FAIL;
     }
     scb->remaining_len += ret;
 
-    do
-    {
+    do {
         // After we process a partial or complete payload,
         // we always receive a new payload or header starting from the head of the buf.
-        if (scb->status != CO_SOCKET_WEBSOCKET_PAYLOAD)
-        {
+        if (scb->status != CO_SOCKET_WEBSOCKET_PAYLOAD) {
             ret = co_websocket_process_header(cb, scb);
-            if (ret != CO_OK)
-            {
+            if (ret != CO_OK) {
                 return CO_FAIL;
             }
         }
 
         // Perhaps we have already read the header section, and if there are extra bytes left over,
         // we continue reading the payload section.
-        if (scb->status == CO_SOCKET_WEBSOCKET_PAYLOAD)
-        {
+        if (scb->status == CO_SOCKET_WEBSOCKET_PAYLOAD) {
             ret = co_websocket_process_payload(cb, scb);
-            if (ret == CO_FAIL)
-            {
+            if (ret == CO_FAIL) {
                 return CO_FAIL;
             }
         }
@@ -1599,60 +1134,50 @@ static esp_err_t co_websocket_process(co_cb_t *cb, co_socket_cb_t *scb)
  * @param value Optional value
  * @return const char* The specific value starts, or the beginning of value in field.
  */
-static const char *co_http_header_find_field_value(const char *header_start, const char *header_end, const char *field_name, const char *value)
-{
+static const char *co_http_header_find_field_value(const char *header_start, const char *header_end, const char *field_name, const char *value) {
     const char *field_start, *field_end, *next_crlf, *value_start;
     int field_name_len;
 
     field_name_len = (int)strlen(field_name);
 
     field_start = header_start;
-    do
-    {
+    do {
         field_start = strcasestr(field_start + 1, field_name);
         field_end = field_start + field_name_len - 1;
 
-        if (field_start != NULL && field_start - header_start >= 2 && field_start[-2] == '\r' && field_start[-1] == '\n')
-        { // is start with "\r\n" ?
-            if (header_end - field_end >= 1 && field_end[1] == ':')
-            { // is end with ':' ?
+        if (field_start != NULL && field_start - header_start >= 2 && field_start[-2] == '\r' && field_start[-1] == '\n') { // is start with "\r\n" ?
+            if (header_end - field_end >= 1 && field_end[1] == ':') {                                                       // is end with ':' ?
                 break;
             }
         }
     } while (field_start != NULL);
 
-    if (field_start == NULL)
-    {
+    if (field_start == NULL) {
         return NULL;
     }
 
     // find the field terminator
     next_crlf = strcasestr(field_start, "\r\n");
-    if (next_crlf == NULL)
-    {
+    if (next_crlf == NULL) {
         return NULL; // Malformed HTTP header!
     }
 
     // If not looking for a value, then return a pointer to the start of values string
-    if (value == NULL)
-    {
+    if (value == NULL) {
         return field_end + 2; // 2 for ':'  ' '(blank)
     }
 
     value_start = strcasestr(field_start, value);
-    if (value_start == NULL)
-    {
+    if (value_start == NULL) {
         return NULL;
     }
 
-    if (value_start > next_crlf)
-    {
+    if (value_start > next_crlf) {
         return NULL; // encounter with unanticipated CRLF
     }
 
     // The value we found should be properly delineated from the other tokens
-    if (isalnum((unsigned char)value_start[-1]) || isalnum((unsigned char)value_start[strlen(value)]))
-    {
+    if (isalnum((unsigned char)value_start[-1]) || isalnum((unsigned char)value_start[strlen(value)])) {
         // "field_name: value1, value2,"
         // Consecutive tokens will be considered as errors.
         return NULL;
@@ -1661,39 +1186,33 @@ static const char *co_http_header_find_field_value(const char *header_start, con
     return value_start;
 }
 
-static void co_http_error_400_response(co_cb_t *cb, co_socket_cb_t *scb)
-{
+static void co_http_error_400_response(co_cb_t *cb, co_socket_cb_t *scb) {
     const char *error = "HTTP/1.1 400 Bad Request\r\n\r\n";
     send(scb->fd, error, strlen(error), 0);
 }
 
 #define WS_GUID "258EAFA5-E914-47DA-95CA-C5AB0DC85B11"
 
-int co_sha1(const unsigned char *src, size_t src_len, unsigned char *dst)
-{
+int co_sha1(const unsigned char *src, size_t src_len, unsigned char *dst) {
     return mbedtls_sha1_ret(src, src_len, dst);
 }
 
-int co_base64_encode(unsigned char *dst, size_t dst_len, size_t *written_len, unsigned char *src, size_t src_len)
-{
+int co_base64_encode(unsigned char *dst, size_t dst_len, size_t *written_len, unsigned char *src, size_t src_len) {
     return mbedtls_base64_encode(dst, dst_len, written_len, src, src_len);
 }
 
-static esp_err_t co_websocket_create_accept_key(char *dst, size_t dst_len, const char *client_key)
-{
+static esp_err_t co_websocket_create_accept_key(char *dst, size_t dst_len, const char *client_key) {
     uint8_t sha1buf[20], key_src[60];
 
     memcpy(key_src, client_key, 24);
     memcpy(key_src + 24, WS_GUID, 36);
 
-    if (co_sha1(key_src, sizeof(key_src), sha1buf) != 0)
-    {
+    if (co_sha1(key_src, sizeof(key_src), sha1buf) != 0) {
         return ESP_FAIL;
     }
 
     size_t base64_encode_len;
-    if (co_base64_encode((unsigned char *)dst, dst_len, &base64_encode_len, sha1buf, sizeof(sha1buf)) != 0)
-    {
+    if (co_base64_encode((unsigned char *)dst, dst_len, &base64_encode_len, sha1buf, sizeof(sha1buf)) != 0) {
         return ESP_FAIL;
     }
 
@@ -1703,13 +1222,11 @@ static esp_err_t co_websocket_create_accept_key(char *dst, size_t dst_len, const
     return ESP_OK;
 }
 
-static esp_err_t co_websocket_handshake_send_key(int fd, const char *client_key)
-{
+static esp_err_t co_websocket_handshake_send_key(int fd, const char *client_key) {
     char res_header[256], accept_key[29];
     int res_header_length;
 
-    if (co_websocket_create_accept_key(accept_key, sizeof(accept_key), client_key) != ESP_OK)
-    {
+    if (co_websocket_create_accept_key(accept_key, sizeof(accept_key), client_key) != ESP_OK) {
         ESP_LOGE(CO_TAG, LOG_FMT("fail to create accept key"));
         return ESP_FAIL;
     }
@@ -1729,10 +1246,8 @@ static esp_err_t co_websocket_handshake_send_key(int fd, const char *client_key)
     return ESP_OK;
 }
 
-static esp_err_t co_websocket_handshake_process(co_cb_t *cb, co_socket_cb_t *scb)
-{
-    if (scb->remaining_len == 0)
-    {
+static esp_err_t co_websocket_handshake_process(co_cb_t *cb, co_socket_cb_t *scb) {
+    if (scb->remaining_len == 0) {
         memset(scb->buf, 0, CONFIG_CO_SOCKET_BUFFER_SIZE);
     }
 
@@ -1740,8 +1255,7 @@ static esp_err_t co_websocket_handshake_process(co_cb_t *cb, co_socket_cb_t *scb
     int fd = scb->fd;
 
     int ret = recv(fd, scb->buf + offset, CONFIG_CO_SOCKET_BUFFER_SIZE - offset, 0);
-    if (ret <= 0)
-    {
+    if (ret <= 0) {
         co_http_error_400_response(cb, scb);
         return ESP_FAIL;
     }
@@ -1749,8 +1263,7 @@ static esp_err_t co_websocket_handshake_process(co_cb_t *cb, co_socket_cb_t *scb
     scb->remaining_len += ret;
 
     // Already received the entire http header?
-    if (scb->remaining_len < 4 || memcmp(scb->buf + scb->remaining_len - 4, "\r\n\r\n", 4) != 0)
-    {
+    if (scb->remaining_len < 4 || memcmp(scb->buf + scb->remaining_len - 4, "\r\n\r\n", 4) != 0) {
         return ESP_OK; // Not yet received
     }
 
@@ -1759,8 +1272,7 @@ static esp_err_t co_websocket_handshake_process(co_cb_t *cb, co_socket_cb_t *scb
 
     if (co_http_header_find_field_value(header_start, header_end, "Upgrade", "websocket") == NULL ||
         co_http_header_find_field_value(header_start, header_end, "Connection", "Upgrade") == NULL ||
-        (ws_key_start = co_http_header_find_field_value(header_start, header_end, "Sec-WebSocket-Key", NULL)) == NULL)
-    {
+        (ws_key_start = co_http_header_find_field_value(header_start, header_end, "Sec-WebSocket-Key", NULL)) == NULL) {
         co_http_error_400_response(cb, scb);
         return ESP_FAIL;
     }
@@ -1772,14 +1284,12 @@ static esp_err_t co_websocket_handshake_process(co_cb_t *cb, co_socket_cb_t *scb
     */
 
     // skip the extra blank
-    for (; *ws_key_start == ' '; ws_key_start++)
-    {
+    for (; *ws_key_start == ' '; ws_key_start++) {
         ;
     }
 
     // find the end of ws key
-    for (ws_key_end = ws_key_start; *ws_key_end != '\r' && *ws_key_end != ' '; ws_key_end++)
-    {
+    for (ws_key_end = ws_key_start; *ws_key_end != '\r' && *ws_key_end != ' '; ws_key_end++) {
         ;
     }
 
@@ -1788,14 +1298,12 @@ static esp_err_t co_websocket_handshake_process(co_cb_t *cb, co_socket_cb_t *scb
                         |                       ||
                     ws_key_start            ws_key_end
     */
-    if (ws_key_end - ws_key_start != 24)
-    {
+    if (ws_key_end - ws_key_start != 24) {
         co_http_error_400_response(cb, scb);
         return ESP_FAIL;
     }
 
-    if (co_websocket_handshake_send_key(scb->fd, ws_key_start) != ESP_OK)
-    {
+    if (co_websocket_handshake_send_key(scb->fd, ws_key_start) != ESP_OK) {
         co_http_error_400_response(cb, scb);
         return ESP_FAIL;
     }
@@ -1811,15 +1319,12 @@ static esp_err_t co_websocket_handshake_process(co_cb_t *cb, co_socket_cb_t *scb
     return ESP_OK;
 }
 
-static esp_err_t co_socket_data_process(co_cb_t *cb, co_socket_cb_t *scb)
-{
-    if (cb == NULL || scb == NULL)
-    {
+static esp_err_t co_socket_data_process(co_cb_t *cb, co_socket_cb_t *scb) {
+    if (cb == NULL || scb == NULL) {
         return ESP_ERR_INVALID_ARG;
     }
 
-    switch (scb->status)
-    {
+    switch (scb->status) {
     case CO_SOCKET_ACCEPT:
         ESP_LOGW(CO_TAG, LOG_FMT("This state should not occur"));
         return ESP_FAIL; //// TODO: remove this?
@@ -1836,34 +1341,27 @@ static esp_err_t co_socket_data_process(co_cb_t *cb, co_socket_cb_t *scb)
     }
 }
 
-static esp_err_t co_socket_list_alloc(co_cb_t *cb)
-{
-    if (cb == NULL)
-    {
+static esp_err_t co_socket_list_alloc(co_cb_t *cb) {
+    if (cb == NULL) {
         return ESP_ERR_INVALID_ARG;
     }
 
     int i;
     cb->socket_list = calloc(cb->max_listen_num, sizeof(co_socket_cb_t *)); // pointer list
-    if (cb->socket_list == NULL)
-    {
+    if (cb->socket_list == NULL) {
         return ESP_ERR_NO_MEM;
     }
 
-    for (i = 0; i < cb->max_listen_num; i++)
-    {
-        if ((cb->socket_list[i] = calloc(1, sizeof(struct co_socket_cb))) == NULL)
-        {
+    for (i = 0; i < cb->max_listen_num; i++) {
+        if ((cb->socket_list[i] = calloc(1, sizeof(struct co_socket_cb))) == NULL) {
             goto fail;
         }
     }
     return ESP_OK;
 
 fail:
-    for (i = 0; i < cb->max_listen_num; i++)
-    {
-        if (cb->socket_list[i] != NULL)
-        {
+    for (i = 0; i < cb->max_listen_num; i++) {
+        if (cb->socket_list[i] != NULL) {
             free(cb->socket_list[i]);
         }
     }
@@ -1879,13 +1377,10 @@ fail:
  * @param fd socket file descriptor
  * @return err_t
  */
-static err_t co_socket_list_insert(co_cb_t *cb, int fd)
-{
+static err_t co_socket_list_insert(co_cb_t *cb, int fd) {
     int i;
-    for (i = 0; i < cb->max_listen_num; i++)
-    {
-        if (cb->socket_list[i]->fd == -1)
-        {
+    for (i = 0; i < cb->max_listen_num; i++) {
+        if (cb->socket_list[i]->fd == -1) {
             cb->socket_list[i]->fd = fd;
             return ESP_OK;
         }
@@ -1902,29 +1397,22 @@ static err_t co_socket_list_insert(co_cb_t *cb, int fd)
  * @param ignore_closing If true, all fd's that are closing will be ignored.
  * @return int The current socket control block obtained by the iterator, or `NULL` for not found.
  */
-static co_socket_cb_t *co_socket_list_iterate(co_cb_t *cb, co_socket_cb_t *begin, bool ignore_closing)
-{
+static co_socket_cb_t *co_socket_list_iterate(co_cb_t *cb, co_socket_cb_t *begin, bool ignore_closing) {
     int start_index = 0;
     int i;
 
-    if (begin != NULL)
-    {
-        for (i = 0; i < cb->max_listen_num; i++)
-        {
-            if (cb->socket_list[i] == begin)
-            {
+    if (begin != NULL) {
+        for (i = 0; i < cb->max_listen_num; i++) {
+            if (cb->socket_list[i] == begin) {
                 start_index = i + 1;
                 break;
             }
         }
     }
 
-    for (i = start_index; i < cb->max_listen_num; i++)
-    {
-        if (cb->socket_list[i]->fd != -1)
-        {
-            if (ignore_closing && cb->socket_list[i]->status == CO_SOCKET_CLOSING)
-            {
+    for (i = start_index; i < cb->max_listen_num; i++) {
+        if (cb->socket_list[i]->fd != -1) {
+            if (ignore_closing && cb->socket_list[i]->status == CO_SOCKET_CLOSING) {
                 continue;
             }
             return cb->socket_list[i];
@@ -1939,27 +1427,22 @@ static co_socket_cb_t *co_socket_list_iterate(co_cb_t *cb, co_socket_cb_t *begin
  *
  * @param cb corsacOTA cotrol block pointer
  */
-static void co_socket_list_init(co_cb_t *cb)
-{
+static void co_socket_list_init(co_cb_t *cb) {
     int i;
-    for (i = 0; i < cb->max_listen_num; i++)
-    {
+    for (i = 0; i < cb->max_listen_num; i++) {
         cb->socket_list[i]->fd = -1;
         cb->socket_list[i]->status = CO_SOCKET_ACCEPT;
     }
 }
 
-static co_cb_t *co_control_block_create(co_config_t *config)
-{
+static co_cb_t *co_control_block_create(co_config_t *config) {
     co_cb_t *cb = calloc(1, sizeof(co_cb_t));
-    if (cb == NULL)
-    {
+    if (cb == NULL) {
         return NULL;
     }
 
     cb->recv_data = malloc(CONFIG_CO_WS_TEXT_BUFFER_SIZE + 1);
-    if (cb->recv_data == NULL)
-    {
+    if (cb->recv_data == NULL) {
         free(cb);
         return NULL;
     }
@@ -1974,30 +1457,23 @@ static co_cb_t *co_control_block_create(co_config_t *config)
 
     cb->recv_data_offset = 0;
 
-    if (co_socket_list_alloc(cb) != ESP_OK)
-    {
+    if (co_socket_list_alloc(cb) != ESP_OK) {
         free(cb);
         return NULL;
     }
     return cb;
 }
 
-static void co_free_all(co_cb_t *cb)
-{
-    if (cb == NULL)
-    {
+static void co_free_all(co_cb_t *cb) {
+    if (cb == NULL) {
         return;
     }
 
     int i;
-    if (cb->socket_list != NULL)
-    {
-        for (i = 0; i < cb->max_listen_num; i++)
-        {
-            if (cb->socket_list[i] != NULL)
-            {
-                if (cb->socket_list[i]->fd != -1)
-                {
+    if (cb->socket_list != NULL) {
+        for (i = 0; i < cb->max_listen_num; i++) {
+            if (cb->socket_list[i] != NULL) {
+                if (cb->socket_list[i]->fd != -1) {
                     close(cb->socket_list[i]->fd);
                 }
                 free(cb->socket_list[i]->buf);
@@ -2007,8 +1483,7 @@ static void co_free_all(co_cb_t *cb)
         free(cb->socket_list);
     }
 
-    if (cb->listen_fd != -1)
-    {
+    if (cb->listen_fd != -1) {
         close(cb->listen_fd);
     }
 
@@ -2023,23 +1498,20 @@ static void co_free_all(co_cb_t *cb)
  *
  * @param scb Socket control block included in cb
  */
-static void co_socket_buf_free(co_socket_cb_t *scb)
-{
+static void co_socket_buf_free(co_socket_cb_t *scb) {
     free(scb->buf);
     scb->buf = NULL;
     scb->remaining_len = 0;
     scb->read_len = 0;
 }
 
-static int co_socket_init(co_cb_t *cb, co_config_t *config)
-{
+static int co_socket_init(co_cb_t *cb, co_config_t *config) {
 #if (defined CONFIG_LWIP_IPV6) && (CONFIG_LWIP_IPV6 == 1)
     int fd = socket(PF_INET6, SOCK_STREAM, 0);
 #else
     int fd = socket(PF_INET, SOCK_STREAM, 0);
 #endif // (defined CONFIG_LWIP_IPV6) && (CONFIG_LWIP_IPV6 == 1)
-    if (fd < 0)
-    {
+    if (fd < 0) {
         ESP_LOGE(CO_TAG, LOG_FMT("error in socket (%d)"), errno);
         return ESP_FAIL;
     }
@@ -2060,16 +1532,14 @@ static int co_socket_init(co_cb_t *cb, co_config_t *config)
     };
 #endif // (defined CONFIG_LWIP_IPV6) && (CONFIG_LWIP_IPV6 == 1)
     int ret = bind(fd, (struct sockaddr *)&serv_addr, sizeof(serv_addr));
-    if (ret < 0)
-    {
+    if (ret < 0) {
         ESP_LOGE(CO_TAG, LOG_FMT("error in bind (%d)"), errno);
         close(fd);
         return ESP_FAIL;
     }
 
     ret = listen(fd, config->max_listen_num);
-    if (ret < 0)
-    {
+    if (ret < 0) {
         ESP_LOGE(CO_TAG, LOG_FMT("error in listen (%d)"), errno);
         close(fd);
         return ESP_FAIL;
@@ -2086,13 +1556,11 @@ static int co_socket_init(co_cb_t *cb, co_config_t *config)
  * @return esp_err_t
  * - ESP_OK accept successfully
  */
-static esp_err_t co_socket_accept(co_cb_t *cb)
-{
+static esp_err_t co_socket_accept(co_cb_t *cb) {
     struct sockaddr_in addr_from;
     socklen_t addr_from_len = sizeof(addr_from);
     int new_fd = accept(cb->listen_fd, (struct sockaddr *)&addr_from, &addr_from_len);
-    if (new_fd < 0)
-    {
+    if (new_fd < 0) {
         ESP_LOGW(CO_TAG, LOG_FMT("error in accept (%d)"), errno);
         return ESP_FAIL;
     }
@@ -2109,8 +1577,7 @@ static esp_err_t co_socket_accept(co_cb_t *cb)
     setsockopt(new_fd, SOL_SOCKET, SO_SNDTIMEO, (const char *)&tv, sizeof(tv));
 
     // try to add to the socket list
-    if (co_socket_list_insert(cb, new_fd) != ESP_OK)
-    {
+    if (co_socket_list_insert(cb, new_fd) != ESP_OK) {
         ESP_LOGW(CO_TAG, LOG_FMT("Unable to add to socket list"));
         close(new_fd);
         return ESP_FAIL;
@@ -2119,10 +1586,8 @@ static esp_err_t co_socket_accept(co_cb_t *cb)
     // create new buffer
     int i;
     co_socket_cb_t *scb = NULL;
-    for (i = 0; i < cb->max_listen_num; i++)
-    { // find the corresponding SCB
-        if (cb->socket_list[i]->fd == new_fd)
-        {
+    for (i = 0; i < cb->max_listen_num; i++) { // find the corresponding SCB
+        if (cb->socket_list[i]->fd == new_fd) {
             scb = cb->socket_list[i];
             break;
         }
@@ -2130,8 +1595,7 @@ static esp_err_t co_socket_accept(co_cb_t *cb)
     assert(scb != NULL);
     scb->buf = malloc(CONFIG_CO_SOCKET_BUFFER_SIZE + 1);
     scb->remaining_len = 0;
-    if (scb->buf == NULL)
-    {
+    if (scb->buf == NULL) {
         close(new_fd);
         return ESP_ERR_NO_MEM;
     }
@@ -2141,11 +1605,9 @@ static esp_err_t co_socket_accept(co_cb_t *cb)
     return ESP_OK;
 }
 
-static void co_socket_set_non_block(int fd)
-{
+static void co_socket_set_non_block(int fd) {
     int flag;
-    if ((flag = fcntl(fd, F_GETFL, 0)) < 0)
-    {
+    if ((flag = fcntl(fd, F_GETFL, 0)) < 0) {
         return;
     }
 
@@ -2159,13 +1621,11 @@ static void co_socket_set_non_block(int fd)
  * @param cb corsacOTA control block
  * @param scb corsacOTA socket control block
  */
-static void co_socket_close(co_cb_t *cb, co_socket_cb_t *scb)
-{
+static void co_socket_close(co_cb_t *cb, co_socket_cb_t *scb) {
     cb->closing_num++;
     scb->status = CO_SOCKET_CLOSING;
 
-    if (cb->websocket == scb)
-    {
+    if (cb->websocket == scb) {
         cb->websocket = NULL;
     }
 
@@ -2173,23 +1633,19 @@ static void co_socket_close(co_cb_t *cb, co_socket_cb_t *scb)
     shutdown(scb->fd, SHUT_WR); // wait client to close socket
 }
 
-static void co_socket_close_cleanup(co_cb_t *cb)
-{
+static void co_socket_close_cleanup(co_cb_t *cb) {
     int ret;
     co_socket_cb_t *iter;
 
     iter = NULL;
 
-    while ((iter = co_socket_list_iterate(cb, iter, false)) != NULL)
-    {
-        if (iter->status != CO_SOCKET_CLOSING)
-        {
+    while ((iter = co_socket_list_iterate(cb, iter, false)) != NULL) {
+        if (iter->status != CO_SOCKET_CLOSING) {
             continue;
         }
 
         ret = recv(iter->fd, iter->buf, CONFIG_CO_SOCKET_BUFFER_SIZE, 0);
-        if (ret == 0 || errno == ENOTCONN)
-        { // client gracefully closed connection
+        if (ret == 0 || errno == ENOTCONN) { // client gracefully closed connection
             close(iter->fd);
             co_socket_buf_free(iter);
 
@@ -2205,14 +1661,11 @@ static void co_socket_close_cleanup(co_cb_t *cb)
  * @brief Set and find the largest fd in socket list only
  *
  */
-static int co_select_update_maxfd(co_cb_t *cb, fd_set *fdset)
-{
+static int co_select_update_maxfd(co_cb_t *cb, fd_set *fdset) {
     int i;
     int maxfd = -1;
-    for (i = 0; i < cb->max_listen_num; i++)
-    {
-        if (cb->socket_list[i] != NULL && cb->socket_list[i]->fd != -1)
-        {
+    for (i = 0; i < cb->max_listen_num; i++) {
+        if (cb->socket_list[i] != NULL && cb->socket_list[i]->fd != -1) {
             FD_SET(cb->socket_list[i]->fd, fdset);
             maxfd = MAX(maxfd, cb->socket_list[i]->fd);
         }
@@ -2220,19 +1673,15 @@ static int co_select_update_maxfd(co_cb_t *cb, fd_set *fdset)
     return maxfd;
 }
 
-static int co_select_fd_is_valid(int fd)
-{
+static int co_select_fd_is_valid(int fd) {
     return fcntl(fd, F_GETFD, 0) != -1 || errno != EBADF;
 }
 
-static void co_select_clean_invalid(co_cb_t *cb)
-{
+static void co_select_clean_invalid(co_cb_t *cb) {
     int i;
-    for (i = 0; i < cb->max_listen_num; i++)
-    {
+    for (i = 0; i < cb->max_listen_num; i++) {
         if (cb->socket_list[i] != NULL && cb->socket_list[i]->fd != -1 &&
-            !co_select_fd_is_valid(cb->socket_list[i]->fd))
-        {
+            !co_select_fd_is_valid(cb->socket_list[i]->fd)) {
             co_socket_buf_free(cb->socket_list[i]);
         }
     }
@@ -2246,8 +1695,7 @@ static void co_select_clean_invalid(co_cb_t *cb)
  * - ESP_OK success
  * - others: need to close server.
  */
-static esp_err_t co_select_process(co_cb_t *cb)
-{
+static esp_err_t co_select_process(co_cb_t *cb) {
     fd_set read_set;
     FD_ZERO(&read_set);
     FD_SET(cb->listen_fd, &read_set);
@@ -2261,42 +1709,33 @@ static esp_err_t co_select_process(co_cb_t *cb)
     tv.tv_usec = cb->wait_timeout_usec;
 
     int ret = select(maxfd + 1, &read_set, NULL, NULL, &tv);
-    if (ret < 0)
-    {
+    if (ret < 0) {
         ESP_LOGE(CO_TAG, LOG_FMT("error in select (%d)"), errno);
         co_select_clean_invalid(cb);
         return ESP_OK;
-    }
-    else if (ret == 0)
-    {
+    } else if (ret == 0) {
         return ESP_ERR_TIMEOUT;
     }
 
     // 1. Find out if there is any data available on the socket list
     co_socket_cb_t *iter = NULL;
-    while ((iter = co_socket_list_iterate(cb, iter, true)) != NULL)
-    {
-        if (FD_ISSET(iter->fd, &read_set))
-        {
-            if (co_socket_data_process(cb, iter) != ESP_OK)
-            {
+    while ((iter = co_socket_list_iterate(cb, iter, true)) != NULL) {
+        if (FD_ISSET(iter->fd, &read_set)) {
+            if (co_socket_data_process(cb, iter) != ESP_OK) {
                 co_socket_close(cb, iter);
             }
         }
     }
 
     // 2. There are new connections waiting to be accepted
-    if (FD_ISSET(cb->listen_fd, &read_set))
-    {
-        if (co_socket_accept(cb) != ESP_OK)
-        {
+    if (FD_ISSET(cb->listen_fd, &read_set)) {
+        if (co_socket_accept(cb) != ESP_OK) {
             ESP_LOGW(CO_TAG, LOG_FMT("can not accept a new connnection"));
         }
     }
 
     // 3. clean up
-    if (cb->closing_num > 0)
-    {
+    if (cb->closing_num > 0) {
         co_socket_close_cleanup(cb);
     }
 
@@ -2305,13 +1744,11 @@ static esp_err_t co_select_process(co_cb_t *cb)
     return ESP_OK;
 }
 
-static void co_main_thread(void *pvParameter)
-{
+static void co_main_thread(void *pvParameter) {
     // co_config_t *server_config = (co_config_t *)pvParameter;
     ESP_LOGI(CO_TAG, "start corsacOTA thread..."); // TODO: debug
 
-    do
-    {
+    do {
         ;
     } while (co_select_process(global_cb) == ESP_OK);
 
@@ -2319,40 +1756,33 @@ static void co_main_thread(void *pvParameter)
     vTaskDelete(NULL);
 }
 
-static inline int co_thread_create(co_config_t *config)
-{
+static inline int co_thread_create(co_config_t *config) {
     int ret = xTaskCreate(co_main_thread, config->thread_name, config->stack_size, config,
                           config->thread_prio, NULL);
-    if (ret == pdPASS)
-    {
+    if (ret == pdPASS) {
         return ESP_OK;
     }
     ESP_LOGE(CO_TAG, "can not create corsacOTA thread:%d", ret);
     return ESP_FAIL;
 }
 
-int corsacOTA_init(co_handle_t *handle, co_config_t *config)
-{
-    if (handle == NULL || config == NULL)
-    {
+int corsacOTA_init(co_handle_t *handle, co_config_t *config) {
+    if (handle == NULL || config == NULL) {
         return ESP_ERR_INVALID_ARG;
     }
 
-    if (global_cb != NULL)
-    {
+    if (global_cb != NULL) {
         ESP_LOGE(CO_TAG, "already init");
         return ESP_FAIL;
     }
 
     co_cb_t *cb = co_control_block_create(config);
-    if (cb == NULL)
-    {
+    if (cb == NULL) {
         return ESP_ERR_NO_MEM;
     }
 
     int ret = co_socket_init(cb, config);
-    if (ret != ESP_OK)
-    {
+    if (ret != ESP_OK) {
         co_free_all(cb);
         return ESP_FAIL;
     }
@@ -2360,8 +1790,7 @@ int corsacOTA_init(co_handle_t *handle, co_config_t *config)
     co_socket_list_init(cb);
     global_cb = cb;
     // start new corsacOTA thread
-    if (co_thread_create(config) != ESP_OK)
-    {
+    if (co_thread_create(config) != ESP_OK) {
         co_free_all(cb);
         return ESP_FAIL;
     }
