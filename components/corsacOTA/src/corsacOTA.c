@@ -181,6 +181,11 @@ typedef struct co_ota_cb {
     int32_t chunk_size;        // The response will be made every time the chunk size is reached
     int32_t last_index_offset; // The offset recorded in the last response
 
+    // 新增ISP升级相关字段
+    bool is_isp_mode;            // true: 升级下级设备, false: 升级ESP自身
+    uint8_t isp_device_type;     // 目标设备类型
+    uint8_t isp_uart_port;       // ISP使用的UART端口
+    uint32_t isp_baudrate;      // ISP使用的波特率
 } co_ota_cb_t;
 
 /**
@@ -390,22 +395,207 @@ void CO_NO_RETURN co_hardware_restart() {
  * - CO_OK
  * - CO_FAIL
  */
-static co_err_t co_parse_request_text(const char *text, char *op, char *data) {
-    int ret, n;
 
-    n = 0;
-    // "op=auth&data=password"
-    // "op=start&data=12345"
-    // "op=stop&data="
-    ret = sscanf(text, "op=%10[^&]&data=%n%10s", op, &n, data);
+//原先的
+// static co_err_t co_parse_request_text(const char *text, char *op, char *data) {
+//     int ret, n;
+
+//     n = 0;
+//     // "op=auth&data=password"
+//     // "op=start&data=12345"
+//     // "op=stop&data="
+//     ret = sscanf(text, "op=%10[^&]&data=%n%10s", op, &n, data);
+//     if (ret == 2) {
+//         return CO_OK;
+//     } else if (ret == 1 && text[n] == '\0') { // data is empty
+//         data[0] = '\0';
+//         return CO_OK;
+//     } else {
+//         return CO_FAIL;
+//     }
+// }
+static co_err_t co_parse_request_text(const char *text, char *op, char *data, char *target, char *options) {
+    int ret, n, target_pos = 0, options_pos = 0;
+    
+    // 基本格式: "op=start&data=size&target=isp&options=xxxx"
+    ret = sscanf(text, "op=%10[^&]&data=%n%[^&]&target=%n%[^&]%n&options=%n%s", 
+                op, &n, data, &target_pos, target, &options_pos, options);
+    
+    if (target_pos > 0 && options_pos > 0 && ret >= 3) {
+        return CO_OK;
+    }
+    
+    if (target_pos > 0 && ret >= 3) {
+        options[0] = '\0'; // 没有options参数
+        return CO_OK;
+    }
+    
+    // 兼容旧格式 - 无target参数表示升级ESP自身
+    target[0] = '\0';
+    options[0] = '\0';
+    
+    ret = sscanf(text, "op=%10[^&]&data=%n%s", op, &n, data);
     if (ret == 2) {
         return CO_OK;
-    } else if (ret == 1 && text[n] == '\0') { // data is empty
+    } else if (ret == 1 && text[n] == '\0') {
         data[0] = '\0';
         return CO_OK;
-    } else {
-        return CO_FAIL;
     }
+    
+    return CO_FAIL;
+}
+
+/// 处理ISP升级的函数
+static const char *co_isp_ota_init(uint8_t device_type, int32_t size, uint32_t baudrate) {
+    // 配置ISP通信的UART
+    uart_config_t uart_config = {
+        .baud_rate = baudrate,
+        .data_bits = UART_DATA_8_BITS,
+        .parity = UART_PARITY_DISABLE,
+        .stop_bits = UART_STOP_BITS_1,
+        .flow_ctrl = UART_HW_FLOWCTRL_DISABLE
+    };
+    
+    // 使用UART1作为ISP接口 (ESP32C3上的UART1通常是GPIO19和GPIO18)
+    global_cb->ota.isp_uart_port = UART_NUM_1;
+    global_cb->ota.isp_baudrate = baudrate;
+    
+    // 配置UART
+    uart_param_config(global_cb->ota.isp_uart_port, &uart_config);
+    uart_driver_install(global_cb->ota.isp_uart_port, 2048, 2048, 0, NULL, 0);
+    
+    // 在ESP32C3上设置UART引脚
+    uart_set_pin(global_cb->ota.isp_uart_port, 19, 18, -1, -1);
+    
+    // 发送ISP升级启动命令到目标设备
+    uint8_t isp_start_cmd[10] = {0};
+    
+    // 根据设备类型构建不同的ISP启动命令
+    // 这里以STM32为例 (根据实际目标芯片修改)
+    switch (device_type) {
+        case 1: // STM32 设备
+            // STM32 ISP启动序列
+            isp_start_cmd[0] = 0x7F; // 同步字节
+            break;
+        case 2: // 其他设备类型
+            // 自定义协议...
+            break;
+        default:
+            return "不支持的设备类型";
+    }
+    
+    global_cb->ota.isp_device_type = device_type;
+    
+    // 发送启动命令
+    uart_write_bytes(global_cb->ota.isp_uart_port, (const char*)isp_start_cmd, 
+                   device_type == 1 ? 1 : sizeof(isp_start_cmd));
+    
+    // 等待目标设备响应
+    uint8_t response[4] = {0};
+    size_t len = uart_read_bytes(global_cb->ota.isp_uart_port, response, 
+                               sizeof(response), pdMS_TO_TICKS(1000));
+    
+    if (len <= 0 || (device_type == 1 && response[0] != 0x79)) { // STM32回应0x79表示ACK
+        uart_driver_delete(global_cb->ota.isp_uart_port);
+        return "目标设备未进入ISP模式";
+    }
+    
+    // 擦除闪存命令 (根据设备不同有不同命令)
+    if (device_type == 1) { // STM32
+        // 发送STM32的擦除命令...
+        uint8_t erase_cmd[] = {0x43, 0xBC}; // STM32 擦除命令+校验
+        uart_write_bytes(global_cb->ota.isp_uart_port, (const char*)erase_cmd, sizeof(erase_cmd));
+        
+        // 等待擦除确认
+        len = uart_read_bytes(global_cb->ota.isp_uart_port, response, 1, pdMS_TO_TICKS(5000));
+        if (len <= 0 || response[0] != 0x79) {
+            uart_driver_delete(global_cb->ota.isp_uart_port);
+            return "擦除固件失败";
+        }
+    }
+    
+    return NULL; // 成功初始化
+}
+
+static const char *co_isp_ota_write(void *data, size_t len) {
+    uint8_t *buf = (uint8_t*)data;
+    size_t bytes_left = len;
+    size_t pos = 0;
+    uint8_t response[1];
+    
+    // 处理STM32设备
+    if (global_cb->ota.isp_device_type == 1) {
+        while (bytes_left > 0) {
+            // 决定当前块大小
+            size_t chunk_size = bytes_left > 256 ? 256 : bytes_left;
+            
+            // 写入地址命令 (假设从0x08000000开始写入)
+            uint8_t addr_cmd[6] = {0x31, 0xCE, // 写入内存命令+校验
+                                  0x08, 0x00, (global_cb->ota.offset >> 8) & 0xFF, 
+                                  global_cb->ota.offset & 0xFF};
+            uart_write_bytes(global_cb->ota.isp_uart_port, (const char*)addr_cmd, sizeof(addr_cmd));
+            
+            // 等待ACK
+            if (uart_read_bytes(global_cb->ota.isp_uart_port, response, 1, pdMS_TO_TICKS(1000)) <= 0 ||
+                response[0] != 0x79) {
+                return "设置写入地址失败";
+            }
+            
+            // 发送数据长度和数据
+            uint8_t *send_buf = malloc(chunk_size + 2);
+            if (!send_buf) {
+                return "内存不足";
+            }
+            
+            send_buf[0] = chunk_size - 1; // STM32数据长度是N-1
+            memcpy(send_buf + 1, buf + pos, chunk_size);
+            
+            // 计算校验和
+            uint8_t checksum = send_buf[0];
+            for (int i = 0; i < chunk_size; i++) {
+                checksum ^= send_buf[1 + i];
+            }
+            send_buf[1 + chunk_size] = checksum;
+            
+            // 发送数据包
+            uart_write_bytes(global_cb->ota.isp_uart_port, (const char*)send_buf, chunk_size + 2);
+            free(send_buf);
+            
+            // 等待ACK
+            if (uart_read_bytes(global_cb->ota.isp_uart_port, response, 1, pdMS_TO_TICKS(1000)) <= 0 ||
+                response[0] != 0x79) {
+                return "写入数据块失败";
+            }
+            
+            pos += chunk_size;
+            bytes_left -= chunk_size;
+            global_cb->ota.offset += chunk_size;
+        }
+    } else {
+        // 处理其他设备类型的写入
+        // ...
+    }
+    
+    return NULL; // 成功
+}
+
+static const char *co_isp_ota_end() {
+    uint8_t response[1];
+    
+    // 完成STM32烧录
+    if (global_cb->ota.isp_device_type == 1) {
+        // 重置目标设备
+        uint8_t run_cmd[2] = {0x21, 0xDE}; // 运行应用程序命令+校验
+        uart_write_bytes(global_cb->ota.isp_uart_port, (const char*)run_cmd, sizeof(run_cmd));
+        
+        // 等待ACK (部分设备可能不会回复)
+        uart_read_bytes(global_cb->ota.isp_uart_port, response, 1, pdMS_TO_TICKS(500));
+    }
+    
+    // 释放资源
+    uart_driver_delete(global_cb->ota.isp_uart_port);
+    
+    return NULL; // 成功
 }
 
 /*  RFC 6455: The WebSocket Protocol
@@ -724,41 +914,102 @@ static const char *co_ota_end() {
  *
  * @param data Pointer to a string indicating the size of the firmware
  */
-static void co_ota_start(void *data) { // TODO: return value -> status
-    const char *res_msg = "deviceType=" CO_DEVICE_TYPE_NAME "&state=ready&offset=0";
+// static void co_ota_start(void *data) { // TODO: return value -> status
+//     const char *res_msg = "deviceType=" CO_DEVICE_TYPE_NAME "&state=ready&offset=0";
+//     const char *err_msg;
+//     int size;
+
+//     // may be we should ignore status...
+//     // if (global_cb->ota.status != CO_OTA_INIT && global_cb->ota.status != CO_OTA_STOP) {
+//     //     co_websocket_send_msg_with_code(CO_RES_INVALID_STATUS, "OTA has not started");
+//     //     return;
+//     // }
+
+//     size = atoi(data);
+//     if (size < 1) {
+//         co_websocket_send_msg_with_code(CO_RES_INVALID_SIZE, "Invalid size");
+//         return;
+//     }
+
+//     err_msg = co_ota_init(size);
+//     if (err_msg != NULL) {
+//         co_websocket_send_msg_with_code(CO_RES_SYSTEM_ERROR, err_msg);
+//         return;
+//     }
+
+//     global_cb->ota.status = CO_OTA_LOAD;
+//     global_cb->ota.total_size = size;
+
+//     size = min(global_cb->ota.total_size / 10, 1024 * 10); // 10KB default
+//     if (size == 0) {
+//         size = 1; // Firmware too small...
+//     }
+
+//     global_cb->ota.chunk_size = size;
+//     global_cb->ota.offset = 0;
+//     global_cb->ota.last_index_offset = 0;
+
+//     co_websocket_send_msg_with_code(CO_RES_SUCCESS, res_msg);
+// }
+
+static void co_ota_start(void *data) {
+    char target_field[10 + 1] = {0};
+    char options_field[50 + 1] = {0};
+    const char *res_msg;
     const char *err_msg;
     int size;
-
-    // may be we should ignore status...
-    // if (global_cb->ota.status != CO_OTA_INIT && global_cb->ota.status != CO_OTA_STOP) {
-    //     co_websocket_send_msg_with_code(CO_RES_INVALID_STATUS, "OTA has not started");
-    //     return;
-    // }
-
-    size = atoi(data);
-    if (size < 1) {
-        co_websocket_send_msg_with_code(CO_RES_INVALID_SIZE, "Invalid size");
+    
+    // 解析参数
+    if (co_parse_request_text(data, op_field, data_field, target_field, options_field) != CO_OK) {
+        co_websocket_send_msg_with_code(CO_RES_INVALID_ARG, "解析参数失败");
         return;
     }
-
-    err_msg = co_ota_init(size);
+    
+    // 提取固件大小
+    size = atoi(data_field);
+    if (size < 1) {
+        co_websocket_send_msg_with_code(CO_RES_INVALID_SIZE, "无效的固件大小");
+        return;
+    }
+    
+    // 检查是否是ISP升级模式
+    if (strcmp(target_field, "isp") == 0) {
+        // 解析ISP选项 (格式: type=1&baudrate=115200)
+        uint8_t device_type = 1; // 默认
+        uint32_t baudrate = 115200; // 默认
+        
+        char *type_str = strstr(options_field, "type=");
+        if (type_str) {
+            device_type = atoi(type_str + 5);
+        }
+        
+        char *baud_str = strstr(options_field, "baudrate=");
+        if (baud_str) {
+            baudrate = atoi(baud_str + 9);
+        }
+        
+        // 进入ISP升级模式
+        global_cb->ota.is_isp_mode = true;
+        err_msg = co_isp_ota_init(device_type, size, baudrate);
+        res_msg = "deviceType=ISP&state=ready&offset=0";
+    } else {
+        // 正常ESP自身OTA升级
+        global_cb->ota.is_isp_mode = false;
+        err_msg = co_ota_init(size);
+        res_msg = "deviceType=" CO_DEVICE_TYPE_NAME "&state=ready&offset=0";
+    }
+    
     if (err_msg != NULL) {
         co_websocket_send_msg_with_code(CO_RES_SYSTEM_ERROR, err_msg);
         return;
     }
-
+    
     global_cb->ota.status = CO_OTA_LOAD;
     global_cb->ota.total_size = size;
-
-    size = min(global_cb->ota.total_size / 10, 1024 * 10); // 10KB default
-    if (size == 0) {
-        size = 1; // Firmware too small...
-    }
-
-    global_cb->ota.chunk_size = size;
+    global_cb->ota.chunk_size = min(global_cb->ota.total_size / 10, 1024 * 10);
     global_cb->ota.offset = 0;
     global_cb->ota.last_index_offset = 0;
-
+    
     co_websocket_send_msg_with_code(CO_RES_SUCCESS, res_msg);
 }
 
@@ -772,20 +1023,77 @@ static void co_ota_stop(void *data) {
     }
 }
 
+// static void co_websocket_process_binary(uint8_t *data, size_t len) {
+//     char res[32]; // state=ready&offset=2147483647
+//     const char *err_msg;
+//     bool is_done;
+
+//     if (global_cb->ota.status == CO_OTA_LOAD) {
+//         global_cb->ota.offset += (int)len;
+//         is_done = global_cb->ota.total_size == global_cb->ota.offset;
+//         if (is_done) {
+//             // If everything is fine, then we will restart chip afterwards, which does not require the use of the status
+//             global_cb->ota.status = CO_OTA_INIT;
+//         }
+
+//         err_msg = co_ota_write(data, len);
+//         if (err_msg != NULL) {
+//             memset(&global_cb->ota, 0, sizeof(global_cb->ota));
+//             global_cb->ota.status = CO_OTA_STOP;
+//             co_websocket_send_msg_with_code(CO_RES_SYSTEM_ERROR, err_msg);
+//             return;
+//         }
+
+//         // response
+//         if (!is_done && global_cb->ota.offset - global_cb->ota.last_index_offset < global_cb->ota.chunk_size) {
+//             return;
+//         }
+
+//         global_cb->ota.last_index_offset = global_cb->ota.offset;
+
+//         snprintf(res, 32, "state=%s&offset=%d", is_done ? "done" : "ready", global_cb->ota.offset);
+
+//         if (is_done) {
+//             err_msg = co_ota_end();
+//             if (err_msg != NULL) {
+//                 co_websocket_send_msg_with_code(CO_RES_SYSTEM_ERROR, err_msg);
+//                 return;
+//             }
+
+//             co_websocket_send_msg_with_code(CO_RES_SUCCESS, res);
+
+//             ESP_LOGD(CO_TAG, "prepare to restart");
+//             vTaskDelay(pdMS_TO_TICKS(5000));
+//             co_hardware_restart();
+//         }
+
+//         co_websocket_send_msg_with_code(CO_RES_SUCCESS, res);
+//     } else if (global_cb->ota.status != CO_OTA_STOP) {
+//         // skip the rest of the frame when a stop command is received
+//         co_websocket_send_msg_with_code(CO_RES_INVALID_STATUS, "OTA has not started");
+//     }
+// }
+
 static void co_websocket_process_binary(uint8_t *data, size_t len) {
-    char res[32]; // state=ready&offset=2147483647
+    char res[32]; 
     const char *err_msg;
     bool is_done;
 
     if (global_cb->ota.status == CO_OTA_LOAD) {
         global_cb->ota.offset += (int)len;
         is_done = global_cb->ota.total_size == global_cb->ota.offset;
+        
         if (is_done) {
-            // If everything is fine, then we will restart chip afterwards, which does not require the use of the status
             global_cb->ota.status = CO_OTA_INIT;
         }
 
-        err_msg = co_ota_write(data, len);
+        // 根据模式选择写入方式
+        if (global_cb->ota.is_isp_mode) {
+            err_msg = co_isp_ota_write(data, len);
+        } else {
+            err_msg = co_ota_write(data, len);
+        }
+        
         if (err_msg != NULL) {
             memset(&global_cb->ota, 0, sizeof(global_cb->ota));
             global_cb->ota.status = CO_OTA_STOP;
@@ -793,17 +1101,22 @@ static void co_websocket_process_binary(uint8_t *data, size_t len) {
             return;
         }
 
-        // response
+        // 响应分块处理
         if (!is_done && global_cb->ota.offset - global_cb->ota.last_index_offset < global_cb->ota.chunk_size) {
             return;
         }
 
         global_cb->ota.last_index_offset = global_cb->ota.offset;
-
         snprintf(res, 32, "state=%s&offset=%d", is_done ? "done" : "ready", global_cb->ota.offset);
 
         if (is_done) {
-            err_msg = co_ota_end();
+            // 结束OTA流程
+            if (global_cb->ota.is_isp_mode) {
+                err_msg = co_isp_ota_end();
+            } else {
+                err_msg = co_ota_end();
+            }
+            
             if (err_msg != NULL) {
                 co_websocket_send_msg_with_code(CO_RES_SYSTEM_ERROR, err_msg);
                 return;
@@ -811,14 +1124,16 @@ static void co_websocket_process_binary(uint8_t *data, size_t len) {
 
             co_websocket_send_msg_with_code(CO_RES_SUCCESS, res);
 
-            ESP_LOGD(CO_TAG, "prepare to restart");
-            vTaskDelay(pdMS_TO_TICKS(5000));
-            co_hardware_restart();
+            // 仅当升级ESP自身时才需要重启
+            if (!global_cb->ota.is_isp_mode) {
+                ESP_LOGD(CO_TAG, "prepare to restart");
+                vTaskDelay(pdMS_TO_TICKS(5000));
+                co_hardware_restart();
+            }
         }
 
         co_websocket_send_msg_with_code(CO_RES_SUCCESS, res);
     } else if (global_cb->ota.status != CO_OTA_STOP) {
-        // skip the rest of the frame when a stop command is received
         co_websocket_send_msg_with_code(CO_RES_INVALID_STATUS, "OTA has not started");
     }
 }
