@@ -1,0 +1,6 @@
+.vscode/
+build/
+tmp/
+.history/
+sdkconfig.old
+.cache/
