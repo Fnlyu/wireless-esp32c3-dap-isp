@@ -39,7 +39,7 @@ static struct {
 
 #define USE_OTA              1              //打开OTA功能  
 
-#define USE_UART_BRIDGE      1              //打开串口桥接功能
+#define USE_UART_BRIDGE      0              //打开串口桥接功能
 #define UART_BRIDGE_PORT     1234           //串口桥接TCP端口号
 #define UART_BRIDGE_BAUDRATE 115200         //串口波特率
 //
