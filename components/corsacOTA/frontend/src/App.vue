@@ -1,5 +1,10 @@
 <script setup>
+import { ref } from 'vue'
 import FileUpload from './components/FileUpload.vue'
+import ISP from './components/ISP.vue'
+
+// 添加当前活动标签状态
+const activeTab = ref('ota') // 默认显示OTA标签
 </script>
 
 <script>
@@ -8,17 +13,44 @@ export default {
 }
 </script>
 
-
-
 <template>
   <main class="min-h-screen flex flex-col">
     <div class="flex justify-center items-center">
         <img class="logo-img mt-5" src="/logo_light.png" />
-
+    </div>
+    
+    <!-- 添加标签导航 -->
+    <div class="flex justify-center mt-5">
+      <div class="w-11/12 lg:w-7/12 sm:w-8/12 flex border-b border-gray-200">
+        <button 
+          @click="activeTab = 'ota'" 
+          :class="[
+            activeTab === 'ota' 
+              ? 'border-b-2 border-blue-500 text-blue-500' 
+              : 'text-gray-500 hover:text-gray-700'
+          ]"
+          class="py-2 px-4 font-medium transition-colors duration-200"
+        >
+          ESP32C3 OTA升级
+        </button>
+        <button 
+          @click="activeTab = 'isp'" 
+          :class="[
+            activeTab === 'isp' 
+              ? 'border-b-2 border-blue-500 text-blue-500' 
+              : 'text-gray-500 hover:text-gray-700'
+          ]"
+          class="py-2 px-4 font-medium transition-colors duration-200"
+        >
+          ISP外部设备升级
+        </button>
+      </div>
     </div>
 
+    <!-- 根据激活的标签显示不同组件 -->
     <div class="flex justify-center my-5">
-      <FileUpload class="w-11/12 lg:w-7/12 sm:w-8/12" id="my-file" />
+      <FileUpload v-if="activeTab === 'ota'" class="w-11/12 lg:w-7/12 sm:w-8/12" id="my-file" />
+      <ISP v-if="activeTab === 'isp'" class="w-11/12 lg:w-7/12 sm:w-8/12" />
     </div>
 
     <div name="github" class="flex justify-center">
@@ -52,5 +84,17 @@ export default {
   max-width: 100%;
   max-height: 25vh;
   display: block;
+}
+
+/* 添加标签切换动画 */
+.tab-enter-active,
+.tab-leave-active {
+  transition: opacity 0.3s, transform 0.3s;
+}
+
+.tab-enter-from,
+.tab-leave-to {
+  opacity: 0;
+  transform: translateY(10px);
 }
 </style>
