@@ -4,3 +4,4 @@ tmp/
 .history/
 sdkconfig.old
 .cache/
+components/corsacOTA/frontend/node_modules/
