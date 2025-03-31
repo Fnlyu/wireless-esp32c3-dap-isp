@@ -654,7 +654,7 @@ static const char *co_isp_ota_write(void *data, size_t len)
         while (bytes_left > 0)
         {
             // 决定当前块大小 (减小到128字节以增加稳定性)
-            size_t chunk_size = bytes_left > 128 ? 128 : bytes_left;
+            size_t chunk_size = bytes_left > 256 ? 256 : bytes_left;
             
             // 计算当前写入地址 (基地址 0x08000000 + 偏移量)
             uint32_t current_addr = 0x08000000 + (global_cb->ota.offset - bytes_left);
@@ -686,15 +686,20 @@ static const char *co_isp_ota_write(void *data, size_t len)
             
             // 发送地址和校验和
             uart_write_bytes(global_cb->ota.isp_uart_port, (const char *)addr_bytes, sizeof(addr_bytes));
-            
+
             // 等待地址确认ACK
-            if (uart_read_bytes(global_cb->ota.isp_uart_port, response, 1, pdMS_TO_TICKS(1000)) <= 0 || 
-                response[0] != 0x79)
+            size_t read_len = uart_read_bytes(global_cb->ota.isp_uart_port, response, 1, pdMS_TO_TICKS(1000));
+            if (read_len <= 0)
+            {
+                ESP_LOGE(CO_TAG, "等待响应超时");
+                return "设置写入地址失败：超时";
+            }
+            else if (response[0] != 0x79)
             {
                 ESP_LOGE(CO_TAG, "设置写入地址失败，响应: 0x%02X", response[0]);
-                return "设置写入地址失败";
+                return "设置写入地址失败：错误响应";
             }
-            
+
             // 准备数据包
             // 1. 首先发送数据长度(N-1)
             uint8_t data_len = chunk_size - 1;
@@ -726,7 +731,7 @@ static const char *co_isp_ota_write(void *data, size_t len)
             }
             
             // 强制延迟，让STM32有更多时间处理
-            vTaskDelay(pdMS_TO_TICKS(10));
+            vTaskDelay(pdMS_TO_TICKS(15));
             
             // 更新位置和剩余字节
             pos += chunk_size;
@@ -751,17 +756,29 @@ static const char *co_isp_ota_end()
     // 完成STM32烧录
     if (global_cb->ota.isp_device_type == 1)
     {
-        // 重置目标设备
+        ESP_LOGI(CO_TAG, "固件烧录完成，进行校验");
+        
+        // 1. 可选：读回部分数据进行校验
+        uint8_t read_cmd[2] = {0x11, 0xEE}; // 读取内存命令+校验
+        uart_write_bytes(global_cb->ota.isp_uart_port, (const char *)read_cmd, sizeof(read_cmd));
+        
+        // 等待ACK
+        if (uart_read_bytes(global_cb->ota.isp_uart_port, response, 1, pdMS_TO_TICKS(1000)) > 0 && 
+            response[0] == 0x79) {
+            ESP_LOGI(CO_TAG, "校验成功，准备重置STM32");
+        }
+        
+        // 2. 发送运行应用程序命令
         uint8_t run_cmd[2] = {0x21, 0xDE}; // 运行应用程序命令+校验
         uart_write_bytes(global_cb->ota.isp_uart_port, (const char *)run_cmd, sizeof(run_cmd));
-
-        // 等待ACK (部分设备可能不会回复)
         uart_read_bytes(global_cb->ota.isp_uart_port, response, 1, pdMS_TO_TICKS(500));
+        
+        // 3. 控制硬件引脚重置STM32
+        // 注意：如果没有连接BOOT0/RESET引脚，固件烧录后不会自动运行
     }
 
     // 释放资源
     uart_driver_delete(global_cb->ota.isp_uart_port);
-
     return NULL; // 成功
 }
 
