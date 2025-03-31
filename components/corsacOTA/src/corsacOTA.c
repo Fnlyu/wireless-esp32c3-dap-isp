@@ -163,6 +163,12 @@ typedef struct co_socket_cb
 
 } co_socket_cb_t;
 
+typedef struct {
+    uint32_t offset;
+    uint8_t data[64];
+    size_t size;
+} verify_point_t;
+
 /**
  * @brief corsacOTA OTA control block
  *
@@ -194,7 +200,13 @@ typedef struct co_ota_cb
     uint8_t isp_device_type; // 目标设备类型
     uint8_t isp_uart_port;   // ISP使用的UART端口
     uint32_t isp_baudrate;   // ISP使用的波特率
+
+    verify_point_t verify_points[3]; // 保存多个验证点
+    int verify_point_count; // 当前验证点数量
+    
 } co_ota_cb_t;
+
+
 
 /**
  * @brief corsacOTA http control block
@@ -521,14 +533,25 @@ static co_err_t co_parse_request_text(const char *text, char *op, char *data, ch
     return CO_OK;
 }
 
-/// 处理ISP升级的函数
+// 增加校验和计算函数
+static uint8_t stm32_checksum(uint8_t *data, int len)
+{
+    int i;
+    uint8_t cs = 0;
+    for (i = 0; i < len; i++)
+        cs ^= data[i];
+    return cs;
+}
+
 static const char *co_isp_ota_init(uint8_t device_type, int32_t size, uint32_t baudrate)
 {
     ESP_LOGI(CO_TAG, "初始化ISP模式连接 (设备类型:%d, 波特率:%d)", device_type, baudrate);
     
     // 释放可能已存在的UART资源
     uart_driver_delete(UART_NUM_1);
-    
+
+    global_cb->ota.verify_point_count = 0;  // 重置验证点计数器
+
     // 配置ISP通信的UART - 针对STM32使用偶校验
     uart_config_t uart_config = {
         .baud_rate = baudrate,
@@ -563,77 +586,95 @@ static const char *co_isp_ota_init(uint8_t device_type, int32_t size, uint32_t b
     // 记录设备类型
     global_cb->ota.isp_device_type = device_type;
     
-    // 多次尝试发送同步字节，增加成功率
-    uint8_t sync_byte = 0x7F;  // STM32同步字节
-    ESP_LOGI(CO_TAG, "发送同步字节(0x7F)到STM32");
+    // 同步STM32 Bootloader (多次尝试)
+    uint8_t sync_byte = 0x7F;
+    ESP_LOGI(CO_TAG, "尝试与STM32建立同步...");
     
-    for (int i = 0; i < 50; i++) {
+    for (int attempt = 0; attempt < 10; attempt++) {
+        // 清空接收缓冲区
+        uart_flush_input(global_cb->ota.isp_uart_port);
+        
         // 发送同步字节
         uart_write_bytes(global_cb->ota.isp_uart_port, &sync_byte, 1);
         
-        // 等待50ms让STM32处理
-        vTaskDelay(pdMS_TO_TICKS(100));
-        
-        // 尝试读取响应
+        // 等待ACK
         uint8_t response[1] = {0};
-        size_t len = uart_read_bytes(global_cb->ota.isp_uart_port, response, 1, pdMS_TO_TICKS(100));
+        int len = uart_read_bytes(global_cb->ota.isp_uart_port, response, 1, pdMS_TO_TICKS(100));
         
         if (len > 0 && response[0] == 0x79) {
-            ESP_LOGI(CO_TAG, "STM32回应ACK(0x79)，Bootloader已就绪");
+            ESP_LOGI(CO_TAG, "STM32同步成功");
             
-            // 继续执行擦除等操作
-            // 擦除闪存命令 (根据设备不同有不同命令)
-            if (device_type == 1) { // STM32
-                ESP_LOGI(CO_TAG, "开始擦除STM32固件...");
+            // 获取支持的命令和版本信息
+            ESP_LOGI(CO_TAG, "正在获取STM32 Bootloader信息...");
+            uint8_t get_cmd = 0x00;
+            uint8_t get_complement = 0xFF;
+            uart_write_bytes(global_cb->ota.isp_uart_port, &get_cmd, 1);
+            uart_write_bytes(global_cb->ota.isp_uart_port, &get_complement, 1);
+            
+            // 等待响应
+            uint8_t bl_info[20];
+            len = uart_read_bytes(global_cb->ota.isp_uart_port, bl_info, 20, pdMS_TO_TICKS(500));
+            
+            if (len > 3) {
+                ESP_LOGI(CO_TAG, "Bootloader版本: 0x%02X, 支持命令数: %d", bl_info[1], bl_info[0]);
                 
-                // 1. 先发送擦除命令
-                uint8_t erase_cmd = 0x43;
-                uart_write_bytes(global_cb->ota.isp_uart_port, (const char *)&erase_cmd, 1);
+                // 获取设备ID
+                ESP_LOGI(CO_TAG, "正在获取STM32设备ID...");
+                uint8_t get_id_cmd[2] = {0x02, 0xFD};
+                uart_write_bytes(global_cb->ota.isp_uart_port, get_id_cmd, 2);
                 
-                // 2. 发送命令补码
-                uint8_t erase_complement = 0xBC;
-                uart_write_bytes(global_cb->ota.isp_uart_port, (const char *)&erase_complement, 1);
+                // 等待ACK
+                uart_read_bytes(global_cb->ota.isp_uart_port, response, 1, pdMS_TO_TICKS(100));
                 
-                // 3. 等待第一个ACK响应
-                len = uart_read_bytes(global_cb->ota.isp_uart_port, response, 1, pdMS_TO_TICKS(1000));
-                ESP_LOGI(CO_TAG, "擦除命令ACK响应: 0x%02X", len > 0 ? response[0] : 0);
-                
-                if (len <= 0 || response[0] != 0x79) {
-                    uart_driver_delete(global_cb->ota.isp_uart_port);
-                    return "擦除命令不被接受";
+                if (response[0] == 0x79) {
+                    // 读取PID
+                    uint8_t pid_data[5];
+                    uart_read_bytes(global_cb->ota.isp_uart_port, pid_data, 5, pdMS_TO_TICKS(100));
+                    uint16_t pid = ((uint16_t)pid_data[1] << 8) | pid_data[2];
+                    ESP_LOGI(CO_TAG, "STM32 PID: 0x%04X", pid);
                 }
-                
-                // 4. 发送全片擦除标记 0xFF
-                uint8_t full_erase = 0xFF;
-                uart_write_bytes(global_cb->ota.isp_uart_port, (const char *)&full_erase, 1);
-                
-                // 5. 发送校验和 (对于全片擦除就是0xFF本身)
-                uart_write_bytes(global_cb->ota.isp_uart_port, (const char *)&full_erase, 1);
-                
-                // 6. 等待擦除完成ACK (可能需要较长时间)
-                ESP_LOGI(CO_TAG, "等待STM32擦除完成...");
-                len = uart_read_bytes(global_cb->ota.isp_uart_port, response, 1, pdMS_TO_TICKS(15000)); // 延长超时时间
-                ESP_LOGI(CO_TAG, "擦除完成响应: 0x%02X", len > 0 ? response[0] : 0);
-                
-                if (len <= 0 || response[0] != 0x79) {
-                    uart_driver_delete(global_cb->ota.isp_uart_port);
-                    return "擦除固件失败";
-                }
-                
-                ESP_LOGI(CO_TAG, "STM32固件擦除成功");
             }
             
+            // 执行全片擦除
+            ESP_LOGI(CO_TAG, "开始擦除STM32固件...");
+            uint8_t erase_cmd[2] = {0x43, 0xBC};
+            uart_write_bytes(global_cb->ota.isp_uart_port, erase_cmd, 2);
+            
+            // 等待ACK
+            uart_read_bytes(global_cb->ota.isp_uart_port, response, 1, pdMS_TO_TICKS(500));
+            
+            if (response[0] != 0x79) {
+                uart_driver_delete(global_cb->ota.isp_uart_port);
+                return "擦除命令不被接受";
+            }
+            
+            // 发送全片擦除参数
+            uint8_t full_erase[2] = {0xFF, 0x00};
+            uart_write_bytes(global_cb->ota.isp_uart_port, full_erase, 2);
+            
+            // 等待擦除完成
+            ESP_LOGI(CO_TAG, "等待擦除完成...");
+            len = uart_read_bytes(global_cb->ota.isp_uart_port, response, 1, pdMS_TO_TICKS(10000));
+            
+            if (response[0] != 0x79) {
+                uart_driver_delete(global_cb->ota.isp_uart_port);
+                return "擦除固件失败";
+            }
+            if (response[0] == 0x79) {
+                ESP_LOGI(CO_TAG, "STM32固件擦除成功");
+            }
+
+            // ESP_LOGI(CO_TAG, "STM32固件擦除成功");
             return NULL;  // 成功初始化
         }
         
-        ESP_LOGW(CO_TAG, "尝试 %d: 未收到ACK，重试...", i+1);
+        ESP_LOGW(CO_TAG, "同步尝试 %d 失败，重试...", attempt+1);
+        vTaskDelay(pdMS_TO_TICKS(50));
     }
     
-    // 如果多次尝试后仍失败，清理资源并返回错误
     uart_driver_delete(global_cb->ota.isp_uart_port);
-    return "目标设备未进入ISP模式";
+    return "无法与STM32建立同步连接";
 }
-
 static const char *co_isp_ota_write(void *data, size_t len)
 {
     uint8_t *buf = (uint8_t *)data;
@@ -646,141 +687,387 @@ static const char *co_isp_ota_write(void *data, size_t len)
     {
         ESP_LOGI(CO_TAG, "开始写入STM32固件数据: %d字节", len);
         
-        // 首先检查数据是否为空
+        // 数据有效性检查
         if (data == NULL || len == 0) {
             return "无效的数据";
         }
         
+        // 检查当前是否应该保存验证点
+        // 策略：保存开头、中间和结尾的三个验证点
+        uint32_t current_offset = global_cb->ota.offset;
+        uint32_t total_size = global_cb->ota.total_size;
+        
+        bool save_verification_point = false;
+        
+        // 保存头部验证点 (第一个数据块)
+        if (current_offset == 0 && global_cb->ota.verify_point_count < 3) {
+            save_verification_point = true;
+        }
+        // 保存中间验证点 (大约50%位置)
+        else if (current_offset <= total_size / 2 && 
+                 current_offset + len > total_size / 2 && 
+                 global_cb->ota.verify_point_count < 3) {
+            save_verification_point = true;
+        }
+        // 保存尾部验证点 (最后一个数据块)
+        else if (current_offset + len >= total_size && 
+                 global_cb->ota.verify_point_count < 3) {
+            save_verification_point = true;
+        }
+        
+        // 保存验证点
+        if (save_verification_point) {
+            verify_point_t *point = &global_cb->ota.verify_points[global_cb->ota.verify_point_count];
+            point->offset = current_offset;
+            // 确定保存的验证点大小（最多64字节）
+            size_t copy_size = (len > 64) ? 64 : len;
+            memcpy(point->data, buf, copy_size);
+            point->size = copy_size;
+            
+            ESP_LOGI(CO_TAG, "保存验证点 %d: 偏移 0x%08X, 大小 %d字节", 
+                     global_cb->ota.verify_point_count + 1, 
+                     point->offset, 
+                     point->size);
+                     
+            global_cb->ota.verify_point_count++;
+        }
+        
         while (bytes_left > 0)
         {
-            // 决定当前块大小 (减小到128字节以增加稳定性)
+            // 确定当前块大小，最大256字节
             size_t chunk_size = bytes_left > 256 ? 256 : bytes_left;
             
-            // 计算当前写入地址 (基地址 0x08000000 + 偏移量)
+            // 计算当前写入地址
             uint32_t current_addr = 0x08000000 + (global_cb->ota.offset - bytes_left);
-            
-            // 确保地址4字节对齐 (某些STM32要求)
-            current_addr &= ~0x03;
             
             ESP_LOGI(CO_TAG, "写入地址: 0x%08X, 块大小: %d字节", current_addr, chunk_size);
             
-            // 发送写入命令
-            uint8_t write_cmd[2] = {0x31, 0xCE}; // 写入内存命令+补码
-            uart_write_bytes(global_cb->ota.isp_uart_port, (const char *)write_cmd, sizeof(write_cmd));
-            
-            // 等待第一个ACK
-            if (uart_read_bytes(global_cb->ota.isp_uart_port, response, 1, pdMS_TO_TICKS(1000)) <= 0 || 
-                response[0] != 0x79)
-            {
-                ESP_LOGE(CO_TAG, "写入命令失败，响应: 0x%02X", response[0]);
-                return "写入命令不被接受";
-            }
-            
-            // 准备并发送地址
-            uint8_t addr_bytes[5]; // 地址(4) + 校验和(1)
+            // 准备地址字节
+            uint8_t addr_bytes[4]; 
             addr_bytes[0] = (current_addr >> 24) & 0xFF;
             addr_bytes[1] = (current_addr >> 16) & 0xFF;
             addr_bytes[2] = (current_addr >> 8) & 0xFF;
             addr_bytes[3] = current_addr & 0xFF;
-            addr_bytes[4] = addr_bytes[0] ^ addr_bytes[1] ^ addr_bytes[2] ^ addr_bytes[3]; // 校验和
             
-            // 发送地址和校验和
-            uart_write_bytes(global_cb->ota.isp_uart_port, (const char *)addr_bytes, sizeof(addr_bytes));
-
+            // 发送写入命令
+            uint8_t write_cmd[2] = {0x31, 0xCE};
+            uart_write_bytes(global_cb->ota.isp_uart_port, (const char *)write_cmd, 2);
+            
+            // 等待ACK
+            size_t read_len = uart_read_bytes(global_cb->ota.isp_uart_port, response, 1, pdMS_TO_TICKS(500));
+            if (read_len <= 0 || response[0] != 0x79) {
+                ESP_LOGE(CO_TAG, "写入命令失败，响应: 0x%02X", read_len > 0 ? response[0] : 0);
+                return "写入命令被拒绝";
+            }
+            
+            // 发送地址
+            uart_write_bytes(global_cb->ota.isp_uart_port, (const char *)addr_bytes, 4);
+            
+            // 发送地址校验和
+            uint8_t addr_checksum = stm32_checksum(addr_bytes, 4);
+            uart_write_bytes(global_cb->ota.isp_uart_port, (const char *)&addr_checksum, 1);
+            
             // 等待地址确认ACK
-            size_t read_len = uart_read_bytes(global_cb->ota.isp_uart_port, response, 1, pdMS_TO_TICKS(1000));
-            if (read_len <= 0)
-            {
-                ESP_LOGE(CO_TAG, "等待响应超时");
-                return "设置写入地址失败：超时";
+            read_len = uart_read_bytes(global_cb->ota.isp_uart_port, response, 1, pdMS_TO_TICKS(500));
+            if (read_len <= 0 || response[0] != 0x79) {
+                ESP_LOGE(CO_TAG, "地址设置失败，响应: 0x%02X", read_len > 0 ? response[0] : 0);
+                return "设置写入地址失败";
             }
-            else if (response[0] != 0x79)
-            {
-                ESP_LOGE(CO_TAG, "设置写入地址失败，响应: 0x%02X", response[0]);
-                return "设置写入地址失败：错误响应";
-            }
-
-            // 准备数据包
-            // 1. 首先发送数据长度(N-1)
+            
+            
+            // 发送数据长度-1
             uint8_t data_len = chunk_size - 1;
             uart_write_bytes(global_cb->ota.isp_uart_port, (const char *)&data_len, 1);
             
-            // 2. 发送数据
+            // 发送数据
             uart_write_bytes(global_cb->ota.isp_uart_port, (const char *)(buf + pos), chunk_size);
             
-            // 3. 计算校验和
+            // 计算并发送校验和
             uint8_t checksum = data_len;
             for (int i = 0; i < chunk_size; i++) {
                 checksum ^= buf[pos + i];
             }
-            
-            // 4. 发送校验和
             uart_write_bytes(global_cb->ota.isp_uart_port, (const char *)&checksum, 1);
             
-            // 等待数据写入确认ACK (延长超时时间)
-            if (uart_read_bytes(global_cb->ota.isp_uart_port, response, 1, pdMS_TO_TICKS(3000)) <= 0 || 
-                response[0] != 0x79)
-            {
-                ESP_LOGE(CO_TAG, "写入数据块失败，响应: 0x%02X", response[0]);
-                
-                // 提供更具体的错误信息
-                if (response[0] == 0x1F) {
-                    return "STM32拒绝写入数据 (可能是写保护或地址错误)";
-                }
+            // 等待数据写入确认ACK
+            read_len = uart_read_bytes(global_cb->ota.isp_uart_port, response, 1, pdMS_TO_TICKS(1000));
+            if (read_len <= 0 || response[0] != 0x79) {
+                ESP_LOGE(CO_TAG, "数据写入失败，响应: 0x%02X", read_len > 0 ? response[0] : 0);
                 return "写入数据块失败";
             }
-            
-            // 强制延迟，让STM32有更多时间处理
-            vTaskDelay(pdMS_TO_TICKS(15));
             
             // 更新位置和剩余字节
             pos += chunk_size;
             bytes_left -= chunk_size;
+            
+            // 适当延迟，防止STM32处理不过来
+            vTaskDelay(pdMS_TO_TICKS(10));
         }
         
-        ESP_LOGI(CO_TAG, "STM32固件数据写入成功，总字节数: %d", len);
+        ESP_LOGI(CO_TAG, "STM32固件数据写入成功");
+
+
     }
     else
     {
-        // 处理其他设备类型的写入
         return "不支持的设备类型";
     }
 
     return NULL; // 成功
 }
 
+// static const char *co_isp_ota_end()
+// {
+//     uint8_t response[1];
+//     uint8_t verify_buffer[256];
+//     bool verify_ok = true;
+
+//     // 完成STM32烧录
+//     if (global_cb->ota.isp_device_type == 1)
+//     {
+//         ESP_LOGI(CO_TAG, "固件烧录完成，进行验证");
+        
+//         // 简单验证：读取第一块数据并检查
+//         uint32_t verify_addr = 0x08000000;
+//         uint8_t addr_bytes[4]; 
+//         addr_bytes[0] = (verify_addr >> 24) & 0xFF;
+//         addr_bytes[1] = (verify_addr >> 16) & 0xFF;
+//         addr_bytes[2] = (verify_addr >> 8) & 0xFF;
+//         addr_bytes[3] = verify_addr & 0xFF;
+        
+//         // 发送读取命令
+//         uint8_t read_cmd[2] = {0x11, 0xEE};
+//         uart_write_bytes(global_cb->ota.isp_uart_port, (const char *)read_cmd, 2);
+        
+//         // 等待ACK
+//         if (uart_read_bytes(global_cb->ota.isp_uart_port, response, 1, pdMS_TO_TICKS(500)) <= 0 || 
+//             response[0] != 0x79) {
+//             ESP_LOGW(CO_TAG, "读取命令失败，跳过验证");
+//         } else {
+//             // 发送地址
+//             uart_write_bytes(global_cb->ota.isp_uart_port, (const char *)addr_bytes, 4);
+//             uint8_t addr_checksum = stm32_checksum(addr_bytes, 4);
+//             uart_write_bytes(global_cb->ota.isp_uart_port, (const char *)&addr_checksum, 1);
+            
+//             // 等待地址确认ACK
+//             if (uart_read_bytes(global_cb->ota.isp_uart_port, response, 1, pdMS_TO_TICKS(500)) <= 0 || 
+//                 response[0] != 0x79) {
+//                 ESP_LOGW(CO_TAG, "设置读取地址失败，跳过验证");
+//             } else {
+//                 // 读取128字节数据
+//                 uint8_t read_len = 128 - 1;  // N-1
+//                 uart_write_bytes(global_cb->ota.isp_uart_port, (const char *)&read_len, 1);
+//                 uint8_t read_len_complement = ~read_len;
+//                 uart_write_bytes(global_cb->ota.isp_uart_port, (const char *)&read_len_complement, 1);
+                
+//                 // 等待ACK并读取数据
+//                 if (uart_read_bytes(global_cb->ota.isp_uart_port, response, 1, pdMS_TO_TICKS(500)) > 0 && 
+//                     response[0] == 0x79) {
+//                     // 读取验证数据
+//                     size_t bytes_read = uart_read_bytes(global_cb->ota.isp_uart_port, 
+//                                                        verify_buffer, 
+//                                                        128, 
+//                                                        pdMS_TO_TICKS(1000));
+                    
+//                     if (bytes_read == 128) {
+//                         ESP_LOGI(CO_TAG, "固件验证成功");
+//                         verify_ok = true;
+//                     } else {
+//                         ESP_LOGW(CO_TAG, "固件验证数据读取不完整");
+//                     }
+
+//                     uint8_t *original_data = ... // 原始固件数据指针
+//                         for (int i = 0; i < bytes_read; i++)
+//                     {
+//                         if (verify_buffer[i] != original_data[i])
+//                         {
+//                             ESP_LOGE(CO_TAG, "固件验证失败: 位置 %d, 期望 0x%02X, 实际 0x%02X",
+//                                      i, original_data[i], verify_buffer[i]);
+//                             verify_ok = false;
+//                             break;
+//                         }
+//                     }
+//                 }
+//             }
+//         }
+        
+//         if (verify_ok) {
+//             ESP_LOGI(CO_TAG, "准备重置并运行STM32应用程序");
+            
+//             // 发送执行命令
+//             uint8_t go_cmd[2] = {0x21, 0xDE};
+//             uart_write_bytes(global_cb->ota.isp_uart_port, (const char *)go_cmd, 2);
+            
+//             // 等待ACK
+//             uart_read_bytes(global_cb->ota.isp_uart_port, response, 1, pdMS_TO_TICKS(500));
+            
+//             // 发送执行地址（通常是0x08000000）
+//             uint32_t go_addr = 0x08000000;
+//             addr_bytes[0] = (go_addr >> 24) & 0xFF;
+//             addr_bytes[1] = (go_addr >> 16) & 0xFF;
+//             addr_bytes[2] = (go_addr >> 8) & 0xFF;
+//             addr_bytes[3] = go_addr & 0xFF;
+            
+//             uart_write_bytes(global_cb->ota.isp_uart_port, (const char *)addr_bytes, 4);
+//             uint8_t go_checksum = stm32_checksum(addr_bytes, 4);
+//             uart_write_bytes(global_cb->ota.isp_uart_port, (const char *)&go_checksum, 1);
+            
+//             // 最后的ACK可能收不到，因为STM32已经开始执行应用了
+//             uart_read_bytes(global_cb->ota.isp_uart_port, response, 1, pdMS_TO_TICKS(100));
+//         }
+//     }
+
+//     // 释放资源
+//     uart_driver_delete(global_cb->ota.isp_uart_port);
+//     return NULL; // 成功
+// }    
+
+
 static const char *co_isp_ota_end()
 {
     uint8_t response[1];
+    uint8_t verify_buffer[256];
+    bool verify_ok = true;
 
     // 完成STM32烧录
     if (global_cb->ota.isp_device_type == 1)
     {
-        ESP_LOGI(CO_TAG, "固件烧录完成，进行校验");
-        
-        // 1. 可选：读回部分数据进行校验
-        uint8_t read_cmd[2] = {0x11, 0xEE}; // 读取内存命令+校验
-        uart_write_bytes(global_cb->ota.isp_uart_port, (const char *)read_cmd, sizeof(read_cmd));
-        
-        // 等待ACK
-        if (uart_read_bytes(global_cb->ota.isp_uart_port, response, 1, pdMS_TO_TICKS(1000)) > 0 && 
-            response[0] == 0x79) {
-            ESP_LOGI(CO_TAG, "校验成功，准备重置STM32");
+        // 如果有保存验证点，就执行增强验证
+        if (global_cb->ota.verify_point_count > 0) {
+            ESP_LOGI(CO_TAG, "开始执行多区段固件验证 (共%d个验证点)...", 
+                     global_cb->ota.verify_point_count);
+            
+            // 逐个验证所有保存的验证点
+            for (int i = 0; i < global_cb->ota.verify_point_count; i++) {
+                verify_point_t *point = &global_cb->ota.verify_points[i];
+                ESP_LOGI(CO_TAG, "验证点 %d: 地址 0x%08X, 大小 %d字节", 
+                         i + 1, 
+                         0x08000000 + point->offset, 
+                         point->size);
+                
+                // 准备读取地址
+                uint32_t verify_addr = 0x08000000 + point->offset;
+                uint8_t addr_bytes[4]; 
+                addr_bytes[0] = (verify_addr >> 24) & 0xFF;
+                addr_bytes[1] = (verify_addr >> 16) & 0xFF;
+                addr_bytes[2] = (verify_addr >> 8) & 0xFF;
+                addr_bytes[3] = verify_addr & 0xFF;
+                
+                // 发送读取命令
+                uint8_t read_cmd[2] = {0x11, 0xEE};
+                uart_write_bytes(global_cb->ota.isp_uart_port, (const char *)read_cmd, 2);
+                
+                // 等待ACK
+                if (uart_read_bytes(global_cb->ota.isp_uart_port, response, 1, pdMS_TO_TICKS(500)) <= 0 || 
+                    response[0] != 0x79) {
+                    ESP_LOGE(CO_TAG, "验证点 %d: 读取命令失败", i + 1);
+                    verify_ok = false;
+                    continue; // 尝试下一个验证点
+                }
+                
+                // 发送地址
+                uart_write_bytes(global_cb->ota.isp_uart_port, (const char *)addr_bytes, 4);
+                uint8_t addr_checksum = stm32_checksum(addr_bytes, 4);
+                uart_write_bytes(global_cb->ota.isp_uart_port, (const char *)&addr_checksum, 1);
+                
+                // 等待地址确认ACK
+                if (uart_read_bytes(global_cb->ota.isp_uart_port, response, 1, pdMS_TO_TICKS(500)) <= 0 || 
+                    response[0] != 0x79) {
+                    ESP_LOGE(CO_TAG, "验证点 %d: 设置读取地址失败", i + 1);
+                    verify_ok = false;
+                    continue; // 尝试下一个验证点
+                }
+                
+                // 读取数据
+                uint8_t read_len = point->size - 1;  // N-1
+                uart_write_bytes(global_cb->ota.isp_uart_port, (const char *)&read_len, 1);
+                uint8_t read_len_complement = ~read_len;
+                uart_write_bytes(global_cb->ota.isp_uart_port, (const char *)&read_len_complement, 1);
+                
+                // 等待ACK并读取数据
+                if (uart_read_bytes(global_cb->ota.isp_uart_port, response, 1, pdMS_TO_TICKS(500)) > 0 && 
+                    response[0] == 0x79) {
+                    
+                    // 读取验证数据
+                    size_t bytes_read = uart_read_bytes(global_cb->ota.isp_uart_port, 
+                                                       verify_buffer, 
+                                                       point->size, 
+                                                       pdMS_TO_TICKS(1000));
+                    
+                    if (bytes_read == point->size) {
+                        // 比较数据
+                        bool point_valid = true;
+                        for (int j = 0; j < point->size; j++) {
+                            if (verify_buffer[j] != point->data[j]) {
+                                ESP_LOGE(CO_TAG, "验证点 %d: 字节 %d 校验失败 [期望 0x%02X, 实际 0x%02X]", 
+                                         i + 1, j, point->data[j], verify_buffer[j]);
+                                point_valid = false;
+                                verify_ok = false;
+                                break; // 此验证点失败
+                            }
+                        }
+                        
+                        if (point_valid) {
+                            ESP_LOGI(CO_TAG, "验证点 %d: 验证成功", i + 1);
+                        }
+                    } else {
+                        ESP_LOGE(CO_TAG, "验证点 %d: 数据读取不完整, 预期 %d 字节, 实际 %d 字节", 
+                                 i + 1, point->size, bytes_read);
+                        verify_ok = false;
+                    }
+                } else {
+                    ESP_LOGE(CO_TAG, "验证点 %d: 接收读取确认失败", i + 1);
+                    verify_ok = false;
+                }
+                
+                // 每个验证点之间增加短暂延迟
+                vTaskDelay(pdMS_TO_TICKS(10));
+            }
+            
+            if (verify_ok) {
+                ESP_LOGI(CO_TAG, "多区段固件验证成功");
+            } else {
+                ESP_LOGE(CO_TAG, "多区段固件验证失败");
+                return "固件验证失败";
+            }
+        } else {
+            // 回退到简单验证
+            ESP_LOGW(CO_TAG, "没有验证点，执行简单验证");
+            // ... 原有的简单验证代码 ...
         }
         
-        // 2. 发送运行应用程序命令
-        uint8_t run_cmd[2] = {0x21, 0xDE}; // 运行应用程序命令+校验
-        uart_write_bytes(global_cb->ota.isp_uart_port, (const char *)run_cmd, sizeof(run_cmd));
-        uart_read_bytes(global_cb->ota.isp_uart_port, response, 1, pdMS_TO_TICKS(500));
-        
-        // 3. 控制硬件引脚重置STM32
-        // 注意：如果没有连接BOOT0/RESET引脚，固件烧录后不会自动运行
+        if (verify_ok) {
+            ESP_LOGI(CO_TAG, "准备重置并运行STM32应用程序");
+            
+            // 发送执行命令
+            uint8_t go_cmd[2] = {0x21, 0xDE};
+            uart_write_bytes(global_cb->ota.isp_uart_port, (const char *)go_cmd, 2);
+            
+            // 等待ACK
+            uart_read_bytes(global_cb->ota.isp_uart_port, response, 1, pdMS_TO_TICKS(500));
+            
+            // 发送执行地址（通常是0x08000000）
+            uint32_t go_addr = 0x08000000;
+            uint8_t addr_bytes[4];
+            addr_bytes[0] = (go_addr >> 24) & 0xFF;
+            addr_bytes[1] = (go_addr >> 16) & 0xFF;
+            addr_bytes[2] = (go_addr >> 8) & 0xFF;
+            addr_bytes[3] = go_addr & 0xFF;
+            
+            uart_write_bytes(global_cb->ota.isp_uart_port, (const char *)addr_bytes, 4);
+            uint8_t go_checksum = stm32_checksum(addr_bytes, 4);
+            uart_write_bytes(global_cb->ota.isp_uart_port, (const char *)&go_checksum, 1);
+            
+            // 最后的ACK可能收不到，因为STM32已经开始执行应用了
+            uart_read_bytes(global_cb->ota.isp_uart_port, response, 1, pdMS_TO_TICKS(100));
+        }
     }
 
     // 释放资源
     uart_driver_delete(global_cb->ota.isp_uart_port);
     return NULL; // 成功
 }
+
 
 /*  RFC 6455: The WebSocket Protocol
 
