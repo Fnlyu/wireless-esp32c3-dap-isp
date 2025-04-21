@@ -44,6 +44,9 @@
 // 添加UART驱动头文件
 #include "driver/uart.h"
 
+// 在文件头部添加包含
+#include "ymodem_transfer.h"
+
 #include "sdkconfig.h"
 #if (defined CONFIG_IDF_TARGET_ESP8266) && (CONFIG_IDF_TARGET_ESP8266 == 1)
 #define CO_TARGET_ESP8266 1
@@ -203,6 +206,9 @@ typedef struct co_ota_cb
 
     verify_point_t verify_points[3]; // 保存多个验证点
     int verify_point_count; // 当前验证点数量
+
+        // YMODEM传输控制块
+        ymodem_t ymodem;
     
 } co_ota_cb_t;
 
@@ -1343,6 +1349,7 @@ static const char *co_ota_end()
 //     co_websocket_send_msg_with_code(CO_RES_SUCCESS, res_msg);
 // }
 
+// 修改co_ota_start函数以支持YMODEM
 static void co_ota_start(void *data)
 {
     char op_field[10 + 1] = {0};
@@ -1372,24 +1379,46 @@ static void co_ota_start(void *data)
     if (strcmp(target_field, "isp") == 0)
     {
         // 解析ISP选项 (格式: type=1&baudrate=115200)
-        uint8_t device_type = 1;    // 默认
+        uint8_t device_type = 1;    // 默认STM32 ISP
         uint32_t baudrate = 115200; // 默认
+        char filename[32] = "firmware.bin"; // 默认文件名
 
         char *type_str = strstr(options_field, "type=");
-        if (type_str)
-        {
+        if (type_str) {
             device_type = atoi(type_str + 5);
         }
 
         char *baud_str = strstr(options_field, "baudrate=");
-        if (baud_str)
-        {
+        if (baud_str) {
             baudrate = atoi(baud_str + 9);
+        }
+        
+        char *name_str = strstr(options_field, "filename=");
+        if (name_str) {
+            char *end = strchr(name_str + 9, '&');
+            if (end) {
+                strncpy(filename, name_str + 9, end - (name_str + 9));
+                filename[end - (name_str + 9)] = '\0';
+            } else {
+                strcpy(filename, name_str + 9);
+            }
         }
 
         // 进入ISP升级模式
         global_cb->ota.is_isp_mode = true;
-        err_msg = co_isp_ota_init(device_type, size, baudrate);
+        global_cb->ota.isp_device_type = device_type;
+        global_cb->ota.isp_baudrate = baudrate;
+        
+        if (device_type == 1) {
+            // STM32 ISP模式
+            err_msg = co_isp_ota_init(device_type, size, baudrate);
+        } else if (device_type == 2) {
+            // YMODEM模式
+            err_msg = ymodem_init(&global_cb->ota.ymodem, UART_NUM_1, baudrate, size, filename);
+        } else {
+            err_msg = "不支持的设备类型";
+        }
+        
         res_msg = "deviceType=ISP&state=ready&offset=0";
     }
     else
@@ -1480,6 +1509,7 @@ static void co_ota_stop(void *data)
 //     }
 // }
 
+// 修改co_websocket_process_binary函数以支持YMODEM
 static void co_websocket_process_binary(uint8_t *data, size_t len)
 {
     char res[32];
@@ -1499,7 +1529,15 @@ static void co_websocket_process_binary(uint8_t *data, size_t len)
         // 根据模式选择写入方式
         if (global_cb->ota.is_isp_mode)
         {
-            err_msg = co_isp_ota_write(data, len);
+            if (global_cb->ota.isp_device_type == 1) {
+                // STM32 ISP模式
+                err_msg = co_isp_ota_write(data, len);
+            } else if (global_cb->ota.isp_device_type == 2) {
+                // YMODEM模式
+                err_msg = ymodem_write(&global_cb->ota.ymodem, data, len);
+            } else {
+                err_msg = "不支持的设备类型";
+            }
         }
         else
         {
@@ -1528,7 +1566,15 @@ static void co_websocket_process_binary(uint8_t *data, size_t len)
             // 结束OTA流程
             if (global_cb->ota.is_isp_mode)
             {
-                err_msg = co_isp_ota_end();
+                if (global_cb->ota.isp_device_type == 1) {
+                    // STM32 ISP模式
+                    err_msg = co_isp_ota_end();
+                } else if (global_cb->ota.isp_device_type == 2) {
+                    // YMODEM模式
+                    err_msg = ymodem_end(&global_cb->ota.ymodem);
+                } else {
+                    err_msg = "不支持的设备类型";
+                }
             }
             else
             {
