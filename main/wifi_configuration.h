@@ -18,8 +18,9 @@ static struct {
     // {.ssid = "OTA", .password = "12345678"},
     // {.ssid = "DAP", .password = "12345678"},
     // {.ssid = "313", .password = "313313313"},
-    {.ssid = "7474907", .password = "74747474xds"},
-
+    // {.ssid = "7474907", .password = "74747474xds"},
+    {.ssid = "Ciallo", .password = "123123123"},
+    
     // Add your WAP like this:
     // {.ssid = "your ssid", .password = "your password"},
 };
@@ -41,7 +42,7 @@ static struct {
 
 #define USE_OTA              1              //打开OTA功能  
 
-#define USE_UART_BRIDGE      0              //打开串口桥接功能
+#define USE_UART_BRIDGE      1              //打开串口桥接功能
 #define UART_BRIDGE_PORT     1234           //串口桥接TCP端口号
 #define UART_BRIDGE_BAUDRATE 115200         //串口波特率
 //

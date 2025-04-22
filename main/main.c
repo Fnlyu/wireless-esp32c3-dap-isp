@@ -117,7 +117,7 @@ void app_main() {
         .thread_prio = 8,
         .listen_port = 3241,
         .max_listen_num = 2,
-        .wait_timeout_sec = 60,
+        .wait_timeout_sec = 9999,
         .wait_timeout_usec = 0,
     };
 

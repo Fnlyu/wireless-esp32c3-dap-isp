@@ -4,7 +4,7 @@ set(COMPONENT_SRCS
     uart_bridge.c wifi_handle.c)
 
 if(CONFIG_USE_WEBSOCKET_DAP)
-    list(APPEND COMPONENT_SRCS "tcp_server.c" "DAP_handle.c" "websocket_server.c")
+    list(APPEND COMPONENT_SRCS "main.c" "tcp_server.c" "DAP_handle.c" "websocket_server.c")
 endif()
 
 register_component()

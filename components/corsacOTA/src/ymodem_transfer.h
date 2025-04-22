@@ -1,4 +1,3 @@
-
 #ifndef YMODEM_TRANSFER_H
 #define YMODEM_TRANSFER_H
 

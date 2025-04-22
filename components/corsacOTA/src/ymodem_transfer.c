@@ -1,4 +1,3 @@
-
 #include "ymodem_transfer.h"
 #include "esp_log.h"
 #include "freertos/FreeRTOS.h"
@@ -142,14 +141,13 @@ const char* ymodem_init(ymodem_t* ym, uart_port_t uart_port, uint32_t baudrate,
     ESP_LOGI(TAG, "初始化YMODEM传输 (端口:%d, 波特率:%d, 文件大小:%u, 文件名:%s)",
              uart_port, baudrate, filesize, filename);
     
-    // 配置UART
-    uart_config_t uart_config = {
-        .baud_rate = baudrate,
-        .data_bits = UART_DATA_8_BITS,
-        .parity = UART_PARITY_NONE,
-        .stop_bits = UART_STOP_BITS_1,
-        .flow_ctrl = UART_HW_FLOWCTRL_DISABLE
-    };
+             uart_config_t uart_config = {
+                .baud_rate = baudrate,
+                .data_bits = UART_DATA_8_BITS,
+                .parity = UART_PARITY_DISABLE,  // 正确的值
+                .stop_bits = UART_STOP_BITS_1,
+                .flow_ctrl = UART_HW_FLOWCTRL_DISABLE
+            };
     
     // 尝试释放可能已存在的UART资源
     uart_driver_delete(uart_port);
