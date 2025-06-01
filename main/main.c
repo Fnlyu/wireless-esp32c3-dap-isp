@@ -97,11 +97,7 @@ void app_main() {
     // }
 
     ESP_ERROR_CHECK(nvs_flash_init());
-    // 初始化LED
-    led_init();
-    
-    // 启动LED闪烁任务 (500ms周期)
-    led_blink_start(500);
+
 
 #if (USE_UART_BRIDGE == 1)
     uart_bridge_init();
@@ -152,4 +148,10 @@ void app_main() {
 #if (USE_UART_BRIDGE == 1)
     xTaskCreate(uart_bridge_task, "uart_server", UART_BRIDGE_TASK_STACK_SIZE, NULL, 2, NULL);
 #endif
+
+    // 初始化LED
+    led_init();
+    
+    // // 启动LED闪烁任务 (500ms周期)
+    led_blink_start(500);
 }
