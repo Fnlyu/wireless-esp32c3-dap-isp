@@ -18,6 +18,7 @@
 #include "main/timer.h"
 #include "main/wifi_configuration.h"
 #include "main/wifi_handle.h"
+#include "main/led_blink.h"
 
 #include "components/corsacOTA/src/corsacOTA.h"
 
@@ -96,6 +97,11 @@ void app_main() {
     // }
 
     ESP_ERROR_CHECK(nvs_flash_init());
+    // 初始化LED
+    led_init();
+    
+    // 启动LED闪烁任务 (500ms周期)
+    led_blink_start(500);
 
 #if (USE_UART_BRIDGE == 1)
     uart_bridge_init();
